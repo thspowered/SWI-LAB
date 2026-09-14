@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: swilab-db
+    environment:
+      POSTGRES_USER: swilab
+      POSTGRES_PASSWORD: swilab
+      POSTGRES_DB: swilab
+    ports:
+      # 5433 zámerne, aby to nekolidovalo s lokálnym Postgresom na 5432
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swilab -d swilab"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
