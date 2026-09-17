@@ -60,6 +60,16 @@ def test_reservation_round_trips_through_postgres(session, new_session):
         assert loaded.starts_at.microsecond == 123456
         assert loaded.ends_at.microsecond == 654321
 
+        # Nalez zo spiku, pribity ako assert: timestamptz neuklada pasmo,
+        # databaza vracia UTC. Asserty vyssie to nezachytia - "==" na aware
+        # datetime porovnava okamih, takze presli by rovnako pri +02:00
+        # aj pri +00:00. Ked sa toto spravanie zmeni (napr. niekto nastavi
+        # session TimeZone), chceme sa to dozvediet z testu.
+        assert loaded.starts_at.utcoffset() == timedelta(0), (
+            "ocakavame UTC, nie povodny offset +02:00"
+        )
+        assert loaded.starts_at.hour == 7, "9:30+02:00 ma v UTC hodinu 7, nie 9"
+
         assert loaded.state is ReservationState.DRAFT
         assert loaded.instrument_id == instrument.id
         assert loaded.user_id == user.id

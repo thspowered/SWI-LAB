@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -85,7 +85,12 @@ class Reservation(Base):
         nullable=False,
         default=ReservationState.DRAFT,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Default je tu zamerne: bez neho by kazde vytvorenie rezervacie cez API
+    # muselo created_at nastavovat rucne a prve zabudnutie by skoncilo
+    # chybou az v databaze.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
 
     instrument: Mapped[Instrument] = relationship(back_populates="reservations")
     user: Mapped[User] = relationship()

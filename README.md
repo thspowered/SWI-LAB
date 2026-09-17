@@ -10,12 +10,10 @@ prístroj obsluhuje iba certifikovaný človek.
 
 | Člen | Rola v C01 |
 |---|---|
-| <<DOPLNIT meno>> | spike, PR |
-| <<DOPLNIT meno>> | review PR |
-| <<DOPLNIT meno>> | Project Frame |
-| <<DOPLNIT meno>> | — |
+| Tomáš Krišica | založenie repozitára, review PR pred integráciou |
+| Tomáš Hrubý | engineering spike, PR |
 
-**Repozitár:** <<DOPLNIT URL>>
+**Repozitár:** https://github.com/thspowered/SWI-LAB
 
 ## Doména
 
@@ -42,10 +40,10 @@ Zdôvodnenie v [docs/architecture-and-decisions.md](docs/architecture-and-decisi
 
 ## Ako to spustiť
 
-Predpoklad: nainštalovaný a **spustený** Docker.
+Predpoklady: nainštalovaný a **spustený** Docker, Python **3.12+**.
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
@@ -80,21 +78,21 @@ V C01 je táto cesta iba **definovaná**, nie implementovaná.
 
 ## C01 Definition of Done
 
-- [ ] tím 3–4 členovia
+- [x] tím 3–4 členovia
 - [ ] spoločný repozitár, prístup majú všetci
-- [ ] jasný reservation domain
-- [ ] Resource + Reservation + User
-- [ ] zmysluplné stavy rezervácie
-- [ ] create + confirm/approve + cancel + availability
-- [ ] spoločné pravidlo o neprekrývaní
-- [ ] 1 vlastné domain-specific pravidlo
-- [ ] 1 externá hranica systému
-- [ ] kompletný Project Frame
-- [ ] 1 future pressure Q/C/R/L
+- [x] jasný reservation domain
+- [x] Resource + Reservation + User
+- [x] zmysluplné stavy rezervácie
+- [x] create + confirm/approve + cancel + availability
+- [x] spoločné pravidlo o neprekrývaní
+- [x] 1 vlastné domain-specific pravidlo
+- [x] 1 externá hranica systému
+- [x] kompletný Project Frame
+- [x] 1 future pressure Q/C/R/L
 - [ ] 1 zrecenzovaná a integrovaná zmena
-- [ ] 1 skutočne vykonaný engineering spike
-- [ ] evidence + decision zo spiku
-- [ ] definovaný CP1 walking skeleton
+- [x] 1 skutočne vykonaný engineering spike
+- [x] evidence + decision zo spiku
+- [x] definovaný CP1 walking skeleton
 
 ## Dokumentácia
 
