@@ -8,10 +8,10 @@ prístroj obsluhuje iba certifikovaný človek.
 
 **Názov tímu:** SWI-LAB
 
-| Člen | Rola v C01 |
-|---|---|
+| Člen          | Rola v C01                                       |
+| ------------- | ------------------------------------------------ |
 | Tomáš Krišica | založenie repozitára, review PR pred integráciou |
-| Tomáš Hrubý | engineering spike, PR |
+| Tomáš Hrubý   | engineering spike, PR                            |
 
 **Repozitár:** https://github.com/thspowered/SWI-LAB
 
@@ -25,6 +25,7 @@ prístroj obsluhuje iba certifikovaný človek.
 **Operácie:** create · confirm/approve · cancel · check availability
 
 **Pravidlá:**
+
 1. Dve `CONFIRMED` rezervácie toho istého prístroja sa nesmú prekrývať.
 2. Rezerváciu možno potvrdiť len s platným certifikátom na kategóriu prístroja.
 
@@ -48,7 +49,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 cp .env.example .env
-docker compose up -d db
+docker compose up -d --wait db
 
 pytest -v
 uvicorn swilab.main:app --reload
@@ -78,8 +79,8 @@ V C01 je táto cesta iba **definovaná**, nie implementovaná.
 
 ## C01 Definition of Done
 
-- [x] tím 3–4 členovia
-- [ ] spoločný repozitár, prístup majú všetci
+- [x] tím — 2 členovia
+- [x] spoločný repozitár, prístup majú všetci
 - [x] jasný reservation domain
 - [x] Resource + Reservation + User
 - [x] zmysluplné stavy rezervácie
@@ -89,7 +90,7 @@ V C01 je táto cesta iba **definovaná**, nie implementovaná.
 - [x] 1 externá hranica systému
 - [x] kompletný Project Frame
 - [x] 1 future pressure Q/C/R/L
-- [ ] 1 zrecenzovaná a integrovaná zmena
+- [x] 1 zrecenzovaná a integrovaná zmena — [issue #1](https://github.com/thspowered/SWI-LAB/issues/1) → [PR #2](https://github.com/thspowered/SWI-LAB/pull/2), review pred integráciou
 - [x] 1 skutočne vykonaný engineering spike
 - [x] evidence + decision zo spiku
 - [x] definovaný CP1 walking skeleton
