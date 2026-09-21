@@ -26,3 +26,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Testy nachadzaju balik aj vtedy, ked editable install nefunguje.
+# (Na macOS staci, aby mal .pth subor v site-packages flag "hidden" -
+# CPython skryte .pth zamerne preskakuje a import swilab tichu spadne.)
+pythonpath = ["src"]
