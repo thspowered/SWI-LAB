@@ -97,6 +97,8 @@ V C01 je táto cesta iba **definovaná**, nie implementovaná.
 
 ## Dokumentácia
 
+- [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.1
+- [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia
 - [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 engineering spike

@@ -8,6 +8,9 @@ Nadväzuje na [docs/intent-and-change.md](intent-and-change.md) (Project Frame
 z C01). Pojmy odtiaľ sa tu neopakujú, iba spresňujú tam, kde to operácie
 vyžadujú.
 
+Vizuálne pohľady na to isté správanie — diagram prípadov užitia, stavový diagram
+a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
+
 **Stav:** návrh v0.1 — čaká na schválenie tímom (krok 3).
 
 ---
