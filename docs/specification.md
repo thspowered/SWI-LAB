@@ -81,22 +81,30 @@ súbežnom vykonávaní operácií (viď REQ-04).
 
 | Stav rezervácie | Zrušenie povolené, keď                           |
 | --------------- | ------------------------------------------------ |
-| `DRAFT`         | `currentTime < starts_at`                        |
+| `DRAFT`         | vždy — bez časovej podmienky                      |
 | `CONFIRMED`     | `currentTime + 60 min < starts_at`               |
 | `CANCELLED`     | vždy — operácia je idempotentná, stav sa nemení   |
 
-- **Hranica:** podmienky sú striktné. Presne 60:00 min pred začiatkom sa
-  `CONFIRMED` rezervácia zrušiť **nedá**; 60:01 min pred začiatkom áno.
+- **Hranica:** podmienka pre `CONFIRMED` je striktná. Presne 60:00 min pred
+  začiatkom sa `CONFIRMED` rezervácia zrušiť **nedá**; 60:01 min pred začiatkom
+  áno.
 - **Zdroj času:** hodiny aplikačného servera v UTC. `currentTime` sa odčíta
   **raz** na začiatku operácie a ten istý údaj sa použije pre všetky podmienky
-  danej operácie.
+  danej operácie. Nie je to implementačný detail: bez určeného zdroja času by
+  podmienku „zostáva viac ako 60 minút“ nebolo možné overiť, lebo každá vrstva
+  by sa pýtala iných hodín.
 
 *Zdôvodnenie:* potvrdená rezervácia drží prístroj a odrádza ostatných. Ak sa
 uvoľní pár minút pred začiatkom, nikto to už nestihne využiť a prístroj stojí
 prázdny — čo je presne strata, ktorú má systém odstrániť. Hodina je dohodnutá
 prevádzková lehota laboratória, nie odvodená veličina; ak sa prevádzka zmení,
-mení sa toto číslo na jednom mieste. Návrh v stave `DRAFT` nikoho neblokuje,
-takže preň lehota nemá dôvod existovať.
+mení sa toto číslo na jednom mieste.
+
+Pre `DRAFT` **zámerne neplatí žiadna lehota.** Návrh nikoho neblokuje, takže
+lehota na jeho zrušenie by nemala čo chrániť — chránila by len samotný záznam
+pred vlastníkom. Bez tohto rozhodnutia by navyše vznikol trvalo zaseknutý stav:
+`DRAFT`, ktorého začiatok nastal, sa nedá potvrdiť (REQ-06) a s časovou
+podmienkou by sa nedal ani zrušiť (nález N-03, časť 8).
 
 ### BR-04 — Certifikácia *(domain-specific pravidlo z C01)*
 
@@ -246,6 +254,12 @@ Používateľ sa pýta na prístroj `I` a interval `[s, e)`.
 
 **Zmena stavu:** žiadna — operácia je čítacia.
 
+**Interval v minulosti je platný dopyt.** Na rozdiel od OP-01 tu podmienka
+`currentTime < starts_at` **neplatí**: otázka „bol prístroj v utorok o desiatej
+obsadený a kým“ je legitímna a systém na ňu vie odpovedať z tých istých dát.
+Rozdiel je zámerný — OP-01 mení stav do budúcnosti, OP-02 iba číta (nález N-02,
+časť 8).
+
 **Odkaz na pravidlá:** BR-01, BR-02, BR-05.
 
 **Hlavný úspešný scenár:**
@@ -387,6 +401,12 @@ dvoch ľudí pred jedným prístrojom. Ako sa to zabezpečí (transakčná izol�
 zámok, databázový constraint) je otázka architektúry v C03; **pozorovateľný
 výsledok** patrí sem.
 
+**Prijatý dôsledok:** rezerváciu možno potvrdiť aj menej než 60 minút pred
+začiatkom — a taká rezervácia sa už podľa BR-03 nedá zrušiť. Nie je to
+opomenutie: kto potvrdzuje na poslednú chvíľu, prístroj v tom čase chce, a keby
+ho aj uvoľnil, nikto iný by to už nestihol využiť. Platí to isté, čo zdôvodňuje
+samotnú 60-minútovú lehotu (nález N-01, časť 8).
+
 **Predpoklad / neznáma:** TBD-04.
 
 ---
@@ -402,8 +422,8 @@ Oprávnený používateľ požiada o zrušenie rezervácie `X`.
 
 **Pozorovateľné požiadavky:**
 
-> **REQ-07:** Systém zruší rezerváciu v stave `DRAFT`, ak jej začiatok ešte
-> nenastal (BR-03).
+> **REQ-07:** Systém zruší rezerváciu v stave `DRAFT` bez časového obmedzenia
+> (BR-03).
 
 > **REQ-08:** Systém zruší rezerváciu v stave `CONFIRMED`, ak do jej začiatku
 > zostáva **striktne viac ako 60 minút** (BR-03). Po zrušení prestáva blokovať
@@ -415,7 +435,7 @@ Oprávnený používateľ požiada o zrušenie rezervácie `X`.
 **Predpoklady:**
 - rezervácia existuje,
 - žiadateľ je vlastník alebo `SUPERVISOR` (BR-06),
-- pre `DRAFT` / `CONFIRMED` platí časová podmienka BR-03.
+- pre `CONFIRMED` platí časová podmienka BR-03 (pre `DRAFT` žiadna neplatí).
 
 **Stav po úspešnom vykonaní:**
 - `state = CANCELLED`,
@@ -439,10 +459,12 @@ Oprávnený používateľ požiada o zrušenie rezervácie `X`.
 **Alternatívne / chybové výsledky:**
 - neznáma rezervácia → zamietnuté,
 - žiadateľ nie je vlastník ani supervisor → zamietnuté, stav nezmenený,
-- `DRAFT` a `currentTime >= starts_at` → zamietnuté, zostáva `DRAFT`,
 - `CONFIRMED` a do začiatku zostáva 60 minút alebo menej → zamietnuté, zostáva
   `CONFIRMED` (vrátane prípadu, že začiatok už nastal),
 - už `CANCELLED` → **úspech bez zmeny** (REQ-09).
+
+Pre `DRAFT` neexistuje časový dôvod zamietnutia — zamietnuť sa dá iba neznáma
+rezervácia alebo neoprávnený žiadateľ.
 
 **Súbeh s potvrdením (Cancel vs. Confirm nad tou istou rezerváciou):**
 Rezervácia opustí stav `DRAFT` najviac raz; druhá operácia vidí už zmenený
@@ -460,7 +482,7 @@ prístroj.
 
 ```
 DRAFT, 30 min pred začiatkom          → CANCELLED
-DRAFT, 1 s po začiatku                → zamietnuté, zostáva DRAFT
+DRAFT, 1 s po začiatku                → CANCELLED (pre DRAFT neplatí lehota)
 CONFIRMED, 90 min pred začiatkom      → CANCELLED + prístroj je v tom intervale AVAILABLE
 CONFIRMED, presne 60:00 min pred      → zamietnuté, zostáva CONFIRMED (hranica BR-03)
 CONFIRMED, 60:01 min pred             → CANCELLED
@@ -497,3 +519,127 @@ systému (C01).
 
 Žiadna z týchto položiek nie je doplnená vymyslenou hodnotou. Ak sa v texte
 objaví číslo (60 minút v BR-03), má zdroj — je to rozhodnutie tímu, nie odhad.
+
+---
+
+## 8. Kontrola konzistencie špecifikácie ako celku
+
+Špecifikáciu sme kontrolovali ako **jeden systém tvrdení**, nie ako štyri
+nezávislé texty. Kontrola prebehla po dopísaní diagramov, teda nad textom
+aj obrázkami naraz.
+
+| Kontrola                        | Výsledok                                                                                                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create vs. Confirm              | ✅ Alokácia vzniká výhradne pri `Confirm`. OP-01 to má ako výslovnú požiadavku REQ-02 a ako postcondition („žiadna alokácia nevznikla“).                |
+| Availability vs. Confirm        | ✅ Obe používajú tú istú množinu blokujúcich stavov `{CONFIRMED}` a tú istú definíciu prekryvu (BR-01). Rozdiel pri neaktívnom prístroji je zámerný.¹   |
+| Cancel vs. stavový diagram      | ✅ Po oprave N-03. Text aj diagram povoľujú `DRAFT → CANCELLED`, `CONFIRMED → CANCELLED` a idempotentné opakovanie.                                     |
+| Význam intervalov               | ✅ `[start, end)` v BR-01, vo všetkých operáciách aj v príkladoch overenia vrátane dotyku zľava a sprava. BR-04 používa tú istú polootvorenú logiku.    |
+| Use case diagram vs. text       | ✅ Štyri ciele ↔ OP-01..OP-04. Každá čiara v diagrame má špecifikované správanie; žiadna operácia nie je bez aktéra.                                    |
+| Požiadavka vs. návrhové rozhodnutie | ✅ Žiadny REQ nepredpisuje technológiu. REQ-05 popisuje pozorovateľný výsledok súbehu, nie mechanizmus (zámok/constraint je téma C03).²             |
+| Neistota vs. vymyslená presnosť | ✅ Šesť explicitných TBD. Jediná číselná hodnota v celej špecifikácii (60 min) je rozhodnutie tímu so zdôvodnením.³                                    |
+
+¹ Neaktívny prístroj je pre OP-02 **platná odpoveď** (`UNAVAILABLE` + dôvod),
+pre OP-03 **chyba**. Je to zámer: „je voľný?“ má zmysluplnú odpoveď aj pri
+prístroji v servise, kým „potvrď mi ho“ nemá.
+
+² Jediné miesto, kde sa špecifikácia dotýka mechanizmu, je zdroj času v BR-03.
+Bez určenia, ktoré hodiny sú smerodajné, by podmienka o 60 minútach nebola
+overiteľná — ide teda o sémantiku požiadavky, nie o predpis implementácie.
+
+³ Zvažovali sme doplniť maximálnu dĺžku rezervácie (napr. 8 hodín). Zamietli
+sme to: žiadny zdroj v C01 takú hranicu neuvádza a vymyslené číslo by sa
+z TBD nepozorovane stalo „pravidlom“. Ostáva ako TBD-01.
+
+### Nájdené nesúlady a ich vyriešenie
+
+Kontrola nebola formalita — našla tri veci a všetky si vyžiadali zmenu
+špecifikácie.
+
+**N-01 — Potvrdenie na poslednú chvíľu vyrobí nezrušiteľnú rezerváciu.**
+OP-03 dovolí potvrdiť rezerváciu kedykoľvek pred jej začiatkom, ale BR-03 dovolí
+zrušiť `CONFIRMED` len viac ako 60 minút pred začiatkom. Rezervácia potvrdená
+10 minút pred začiatkom sa teda už nedá zrušiť.
+*Vyriešené:* pravidlo sa nemení — dôsledok je v súlade so zdôvodnením BR-03
+(neskoro uvoľnený prístroj už nikto nevyužije). Opravili sme **špecifikáciu**:
+dôsledok je odteraz v OP-03 napísaný explicitne, aby sa naň neprišlo až pri
+reklamácii používateľa.
+
+**N-02 — Dopyt na dostupnosť v minulosti nebol rozhodnutý.**
+OP-01 zamieta intervaly v minulosti, OP-02 o nich nehovorila nič. Implementácia
+by si doplnila ľubovoľnú z dvoch možností a test by potvrdil práve tú.
+*Vyriešené:* opravili sme **špecifikáciu** — OP-02 výslovne povoľuje dopyty do
+minulosti, pretože je čítacia a odpoveď („kto prístroj vtedy držal“) je jedným
+z dôvodov existencie systému podľa C01.
+
+**N-03 — `DRAFT` po začiatku by ostal natrvalo zaseknutý.**
+Pôvodné znenie BR-03 dovoľovalo zrušiť `DRAFT` len pred jeho začiatkom, pričom
+REQ-06 zakazuje potvrdiť rezerváciu po začiatku. Taká rezervácia by sa nedala
+ani potvrdiť, ani zrušiť — stav bez východiska, ktorý žiadny diagram nezakresľuje
+a ktorý by sa ukázal až po nasadení.
+*Vyriešené:* rozhodnutím tímu sme **zmenili pravidlo** BR-03 — `DRAFT` sa dá
+zrušiť kedykoľvek. Lehota má chrániť ostatných používateľov pred blokovaným
+prístrojom, a návrh nikoho neblokuje. Zmena sa premietla do BR-03, REQ-07,
+predpokladov a príkladov overenia OP-04, do stavového diagramu aj do diagramu
+aktivít OP-04.
+
+Za povšimnutie stojí, že vo všetkých troch prípadoch bol chybný **zdroj
+špecifikácie**, nie príklad overenia — v tejto fáze ešte neexistoval žiadny kód,
+ktorý by sa dal obviniť.
+
+---
+
+## 9. Kontrola prijatia požiadaviek
+
+Každý prijatý požiadavok prešiel kontrolou podľa deviatich otázok (význam,
+potreba, pozorovateľnosť, uskutočniteľnosť, overiteľnosť, stav/čas, súbeh,
+konzistencia, neistota). Nasledujúca tabuľka zhŕňa odpovede na tie otázky, pri
+ktorých sa požiadavky reálne líšia; ostatné sú rozpísané v texte príslušnej
+operácie.
+
+| REQ    | Závisí od stavu, času alebo hranice?                             | Môže súbeh zmeniť business výsledok?                                  | Čím sa overí                                          |
+| ------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------- |
+| REQ-01 | áno — `ends_at > starts_at`, `now < starts_at`, `is_active`        | nie — vytvorenie nezávisí od iných rezervácií                           | vznik práve jedného `DRAFT`; zamietnutie pri `s == e`  |
+| REQ-02 | nie                                                                | nie                                                                     | `DRAFT` vznikne aj pri prekryve a bez certifikátu      |
+| REQ-03 | áno — hranice intervalu (dotyk zľava/sprava), množina stavov       | nie — čítacia operácia, ale výsledok môže zastarať hneď po odpovedi¹    | tri hraničné dopyty okolo `CONFIRMED` [10:00,11:00)    |
+| REQ-04 | áno — stav `DRAFT`, `now < starts_at`, platnosť certifikátu        | **áno** — dve potvrdenia môžu súčasne prejsť kontrolou prekryvu         | potvrdenie pri prekryve zamietnuté, stav zostáva `DRAFT` |
+| REQ-05 | áno — týka sa práve okamihu medzi kontrolou a zápisom              | **áno, toto je jeho jediný obsah**                                      | dve súbežné potvrdenia → najviac jedno `CONFIRMED`     |
+| REQ-06 | áno — hranica `now < starts_at`                                    | hraničný prípad: potvrdenie v okamihu `starts_at` závisí od jedného odčítania času | potvrdenie po začiatku zamietnuté            |
+| REQ-07 | nie — pre `DRAFT` neplatí žiadna lehota (po N-03)                  | zriedkavo: súbeh s `Confirm` — riešené v OP-04, časť „Súbeh s potvrdením“ | zrušenie `DRAFT` pred aj po začiatku prejde          |
+| REQ-08 | áno — hranica presne 60:00 min                                     | ako REQ-07                                                              | 60:00 zamietnuté, 60:01 prejde                        |
+| REQ-09 | nie                                                                | nie — opakovanie nie je novou zmenou stavu                              | druhé zrušenie vráti úspech a stav zostáva `CANCELLED` |
+
+¹ Odpoveď OP-02 je platná k okamihu dopytu a systém ju **negarantuje do
+budúcnosti**. Kto chce istotu, musí potvrdiť (OP-03) — a tam rozhodne REQ-04
+a REQ-05, nie predošlá odpoveď o dostupnosti. Bez tejto vety by používateľ
+právom očakával, že „AVAILABLE“ znamená rezervované.
+
+**Čo revízia skutočne zmenila** (dôkaz, že nešlo o odškrtnutie):
+
+- BR-03 zmenilo obsah: časová podmienka pre `DRAFT` bola po náleze N-03
+  odstránená. S ňou sa preformuloval REQ-07, predpoklady OP-04, dva príklady
+  overenia, stavový diagram aj diagram aktivít OP-04.
+- OP-02 dostala explicitné stanovisko k dopytom do minulosti (nález N-02).
+  Predtým to bola diera, ktorú by ticho vyplnila implementácia.
+- OP-03 dostala pomenovaný prijatý dôsledok neskorého potvrdenia (nález N-01).
+- Maximálnu dĺžku rezervácie sme ako požiadavku **zamietli** — nemá zdroj
+  v C01; ostáva TBD-01.
+- Do baseline sme vedome **nezaradili žiadny výkonnostný cieľ** (typu „dostupnosť
+  sa overí do 200 ms“). Nemá zdroj a bez zdroja je to vymyslená presnosť, nie
+  požiadavka.
+
+---
+
+## 10. Schválenie baseline v0.1
+
+Špecifikácia je pripravená na schválenie tímom. Platí, že **schválená baseline
+znamená, že obaja členovia tímu vedia každú požiadavku obhájiť** — nie že si
+dokument prečítali.
+
+| Člen          | Rola pri baseline v0.1                                  | Stav                         |
+| ------------- | -------------------------------------------------------- | ---------------------------- |
+| Tomáš Hrubý   | návrh špecifikácie, diagramov a kontroly konzistencie     | ✅ 2026-09-21                 |
+| Tomáš Krišica | review pred integráciou (PR `feature/c02-baseline`)       | ⏳ prebieha                   |
+
+Po schválení sa tento stav stáva **Specification Baseline v0.1** a ďalšie zmeny
+(vrátane schvaľovacieho procesu z časti B zadania) sa vedú ako v0.2 s explicitnou
+analýzou dopadu.

@@ -69,7 +69,7 @@ stateDiagram-v2
     [*] --> DRAFT : create / BR-01, BR-05, BR-06
 
     DRAFT --> CONFIRMED : confirm [aktívny prístroj ∧ platný certifikát ∧ bez prekryvu ∧ pred začiatkom]
-    DRAFT --> CANCELLED : cancel [pred začiatkom]
+    DRAFT --> CANCELLED : cancel / bez časovej podmienky
     CONFIRMED --> CANCELLED : cancel [zostáva viac ako 60 min]
     CANCELLED --> CANCELLED : cancel / bez efektu (REQ-09)
 
@@ -99,7 +99,7 @@ stateDiagram-v2
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------- |
 | `[*] → DRAFT`           | používateľ existuje ∧ prístroj existuje ∧ `is_active` ∧ `ends_at > starts_at` ∧ `now < starts_at`                              | REQ-01, BR-01/05/06  |
 | `DRAFT → CONFIRMED`     | žiadateľ oprávnený ∧ `now < starts_at` ∧ prístroj `is_active` ∧ platný certifikát na kategóriu ∧ žiadny prekryv s `CONFIRMED`  | REQ-04, BR-02/04/05/06 |
-| `DRAFT → CANCELLED`     | žiadateľ oprávnený ∧ `now < starts_at`                                                                                         | REQ-07, BR-03, BR-06 |
+| `DRAFT → CANCELLED`     | žiadateľ oprávnený — bez časovej podmienky (nález N-03)                                                                        | REQ-07, BR-03, BR-06 |
 | `CONFIRMED → CANCELLED` | žiadateľ oprávnený ∧ `now + 60 min < starts_at`                                                                                | REQ-08, BR-03, BR-06 |
 | `CANCELLED → CANCELLED` | žiadateľ oprávnený — bez zmeny stavu, bez oznámenia                                                                            | REQ-09               |
 
@@ -247,10 +247,9 @@ flowchart TD
     D -->|"áno"| E["Odčítaj now JEDENKRÁT<br/>BR-03, zdroj času"]
     E --> F{"Aktuálny stav?"}
     F -->|"CANCELLED"| R1["Úspech bez zmeny stavu<br/>bez oznámenia - REQ-09"]
-    F -->|"DRAFT"| G{"now < starts_at?"}
+    F -->|"DRAFT"| G["Bez časovej podmienky<br/>BR-03, nález N-03"]
     F -->|"CONFIRMED"| H{"now + 60 min < starts_at?"}
-    G -->|"nie"| X3["Zamietni: TOO_LATE<br/>zostáva DRAFT"]
-    G -->|"áno"| J["state = CANCELLED"]
+    G --> J["state = CANCELLED"]
     H -->|"nie"| X4["Zamietni: TOO_LATE<br/>zostáva CONFIRMED"]
     H -->|"áno"| J
     J --> K["Oznámenie do Notification Service<br/>TBD-03 - v0.1 neimplementované"]
@@ -259,7 +258,6 @@ flowchart TD
     R1 --> Z
     X1 --> Z
     X2 --> Z
-    X3 --> Z
     X4 --> Z
 
     N["Prístroj sa uvoľní až tu:<br/>po prechode do CANCELLED vracia<br/>OP-02 pre ten interval AVAILABLE"]
@@ -269,7 +267,7 @@ flowchart TD
     classDef ok fill:#eaf7ea,stroke:#27ae60,color:#032;
     classDef note fill:#fffbe6,stroke:#c9a227,color:#332;
     classDef todo fill:#f0f0f0,stroke:#888,color:#333,stroke-dasharray: 4 3;
-    class X1,X2,X3,X4 rej;
+    class X1,X2,X4 rej;
     class R1 ok;
     class N note;
     class K todo;
