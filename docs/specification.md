@@ -18,7 +18,7 @@ a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
 | Verzia | Obsah |
 | ------ | ----- |
 | v0.1 | Štyri základné operácie, pravidlá BR-01..BR-06, požiadavky REQ-01..REQ-09. Schválená tímom. |
-| v0.2 | Schvaľovací proces: nová operácia OP-05, stavy `PENDING_APPROVAL`, `REJECTED`, `EXPIRED`, pravidlá BR-07 a BR-08, požiadavky REQ-10..REQ-15. |
+| v0.2 | Schvaľovací proces: nová operácia OP-05, stavy `PENDING_APPROVAL`, `REJECTED`, `EXPIRED`, pravidlá BR-07 a BR-08, požiadavky REQ-10..REQ-16. |
 
 Čo presne zmena zasiahla a čo výslovne nie, je v
 [docs/change-impact-c02.md](change-impact-c02.md). Analýza dopadu vznikla
@@ -55,8 +55,14 @@ tokom `DRAFT → CONFIRMED` a OP-05 sa ich netýka.
   navyše **rozhoduje o žiadostiach** o schválenie (OP-05, BR-07). Spravuje
   prístroje a certifikáty (mimo rozsah v0.2).
 - **Notification Service** (externý, podporný) — prijíma oznámenie po úspešnom
-  potvrdení, zrušení a **po rozhodnutí o žiadosti**. Hranica je definovaná,
-  **nie implementovaná** — viď TBD-03.
+  potvrdení, zrušení, **po podaní žiadosti o schválenie** (adresát je vedúci
+  laboratória) a **po rozhodnutí o žiadosti** (adresát je žiadateľ). Hranica je
+  definovaná, **nie implementovaná** — viď TBD-03.
+
+Oznámenie pri podaní žiadosti nie je kozmetika: celý schvaľovací tok stojí na
+tom, že sa vedúci o žiadosti dozvie. Systém nemá operáciu „zoznam čakajúcich
+žiadostí“ (TBD-09), takže bez oznámenia by žiadosť čakala, kým na ňu niekto
+náhodou nenarazí.
 
 Zmena v0.2 **nepridáva nového aktéra.** Vedúci laboratória aktérom už bol;
 pribudol mu nový cieľ.
@@ -65,9 +71,16 @@ pribudol mu nový cieľ.
 
 Prístroj je **exkluzívny**: v danom okamihu ho môže používať jeden človek.
 
-**Blokujúce stavy** sú `CONFIRMED` a `PENDING_APPROVAL`. Prístroj je pre
-interval blokovaný práve vtedy, keď preň existuje rezervácia v jednom z týchto
-stavov. Stavy `DRAFT`, `CANCELLED`, `REJECTED` a `EXPIRED` neblokujú nič.
+**Blokujúce stavy** sú `CONFIRMED` a **živá** žiadosť `PENDING_APPROVAL`
+(živá = `currentTime < starts_at`, BR-08). Prístroj je pre interval blokovaný
+práve vtedy, keď preň existuje rezervácia v jednom z týchto stavov. Stavy
+`DRAFT`, `CANCELLED`, `REJECTED`, `EXPIRED` ani **vypršaná** žiadosť
+`PENDING_APPROVAL` neblokujú nič.
+
+Podmienka živosti je súčasťou definície, nie výnimka z nej. Bez nej by
+invariant BR-02 hovoril, že vypršaná žiadosť bráni novej rezervácii — čo je
+presný opak toho, čo BR-08 sľubuje, a systém by si protirečil v okamihu, keď
+by termín žiadosti nastal.
 
 Rozdiel medzi nimi je podstatný a musí byť viditeľný vo výsledku OP-02:
 
@@ -111,8 +124,13 @@ konfliktu.
 ### BR-02 — Invariant exkluzívneho prístroja *(zmenené v v0.2)*
 
 V žiadnom potvrdenom stave systému nesmú existovať dve rezervácie toho istého
-prístroja v **blokujúcom stave** (`CONFIRMED` alebo `PENDING_APPROVAL`),
-ktorých intervaly sa prekrývajú podľa BR-01.
+prístroja v **blokujúcom stave** (`CONFIRMED` alebo **živá** žiadosť
+`PENDING_APPROVAL` podľa BR-08), ktorých intervaly sa prekrývajú podľa BR-01.
+
+Vypršaná žiadosť do invariantu nevstupuje. Znamená to, že v databáze môže
+zostať záznam v stave `PENDING_APPROVAL`, ktorý sa prekrýva s potvrdenou
+rezerváciou — nie je to porušenie BR-02, pretože taká žiadosť už prístroj
+neblokuje a nikdy sa nestane alokáciou (REQ-15).
 
 Toto je **jediný invariant systému nad viacerými záznamami**. Platí aj pri
 súbežnom vykonávaní operácií (viď REQ-05).
@@ -128,7 +146,7 @@ keď to už nikto nečaká.
 | Stav rezervácie      | Zrušenie povolené, keď                           |
 | -------------------- | ------------------------------------------------ |
 | `DRAFT`              | vždy — bez časovej podmienky                      |
-| `PENDING_APPROVAL`   | vždy — bez časovej podmienky *(v0.2)*             |
+| `PENDING_APPROVAL`   | kým žiadosť nevypršala, t. j. `currentTime < starts_at` (BR-08) — inak sa zruší nie zrušenie, ale žiadosť: stav sa zapíše ako `EXPIRED` a operácia sa zamietne *(v0.2)* |
 | `CONFIRMED`          | `currentTime + 60 min < starts_at`               |
 | `CANCELLED`          | vždy — operácia je idempotentná, stav sa nemení   |
 | `REJECTED`, `EXPIRED` | **nikdy** — koncové stavy, zamietnuté ako `INVALID_STATE` *(v0.2)* |
@@ -154,12 +172,16 @@ pred vlastníkom. Bez tohto rozhodnutia by navyše vznikol trvalo zaseknutý sta
 `DRAFT`, ktorého začiatok nastal, sa nedá potvrdiť (REQ-06) a s časovou
 podmienkou by sa nedal ani zrušiť (nález N-03, časť 9).
 
-**Pre `PENDING_APPROVAL` tiež neplatí lehota** *(rozhodnutie tímu, v0.2)*, hoci
-tento stav prístroj blokuje. Nie je to nedôslednosť: 60-minútová lehota
+**Pre `PENDING_APPROVAL` neplatí 60-minútová lehota** *(rozhodnutie tímu,
+v0.2)*, hoci tento stav prístroj blokuje. Nie je to nedôslednosť: lehota
 nechráni prístroj pred uvoľnením, ale chráni **záväzok** — a voči žiadateľovi,
 ktorého žiadosť ešte nikto neschválil, žiadny záväzok nevznikol. Nútiť ho
 držať žiadosť, ktorú mu vedúci môže kedykoľvek schváliť, by bolo horšie než
 neskoré uvoľnenie prístroja.
+
+Platí preň však **hranica expirácie** (BR-08): žiadosť, ktorej termín už začal,
+sa nedá zrušiť, pretože v tom okamihu už nie je žiadosťou — je vypršaná. Nejde
+o lehotu na zrušenie, ale o to, že predmet zrušenia zanikol (nález N-04).
 
 `REJECTED` a `EXPIRED` sa zrušiť nedajú a zrušenie na nich **nie je
 idempotentné** (REQ-09 sa na ne nevzťahuje). Tiché „úspešné“ zrušenie by
@@ -194,14 +216,16 @@ alokáciu** a nesmie prijať nový zámer:
 - nedá sa schváliť čakajúca žiadosť (OP-05) *(v0.2)*,
 - kontrola dostupnosti ho hlási ako nedostupný pre ľubovoľný interval (OP-02).
 
-Deaktivácia prístroja **neruší** existujúce `CONFIRMED` rezervácie — tie sa
-riešia ručne cez OP-04. Správa prístrojov nie je v rozsahu v0.1 (TBD-02).
+Deaktivácia prístroja **neruší** existujúce `CONFIRMED` rezervácie ani živé
+žiadosti — tie sa riešia ručne cez OP-04, prípadne zamietnutím (REQ-12).
+Správa prístrojov nie je v rozsahu tejto baseline (TBD-02).
 
 ### BR-06 — Oprávnenie *(zjednodušené v0.1)*
 
 - Používateľ uvedený v požiadavke musí existovať.
 - Operácie nad existujúcou rezerváciou (OP-03, OP-04) smie vykonať iba jej
-  **vlastník** alebo používateľ s rolou `SUPERVISOR`.
+  **vlastník** alebo používateľ s rolou `SUPERVISOR`. Pre OP-05 platí prísnejšie
+  pravidlo BR-07, ktoré toto nenahrádza, ale dopĺňa.
 - OP-02 (kontrola dostupnosti) je čítacia a oprávnenie nevyžaduje.
 
 **Predpoklad:** identita prichádza v požiadavke ako `user_id`; autentifikácia je
@@ -246,10 +270,25 @@ prázdny, a ani jedno sa rozhodnutím vedúceho spätne nezmení.
 
 **Ako prechod vzniká.** `EXPIRED` je jediný prechod v systéme, ktorý nespúšťa
 človek. Špecifikácia ho popisuje ako **pozorovateľný stav, nie ako úlohu
-plánovača**: žiadosť so `starts_at` v minulosti sa považuje za vypršanú
-v každej operácii, ktorá ju číta, a systém tento stav zapíše pri najbližšej
-takej operácii. Či bude existovať aj dávkové dočisťovanie, je rozhodnutie
-architektúry v C03 — na pozorovateľné správanie nemá vplyv.
+plánovača**, a rozlišuje dve veci:
+
+- **Vyhodnotenie:** žiadosť so `starts_at` v minulosti sa považuje za vypršanú
+  v **každej** operácii, ktorá ju číta. OP-02 ju preto nezapočíta do blokovania
+  a OP-03 jej prekryv ignoruje — bez ohľadu na to, aký stav má zapísaný.
+- **Zápis:** stav `EXPIRED` zapíšu iba operácie, ktoré na tú **konkrétnu**
+  žiadosť smerujú — OP-04 a OP-05. Čítacie operácie (OP-02) ani operácie nad
+  inou rezerváciou (OP-03) cudzí záznam neprepisujú.
+
+Dôsledok, ktorý treba priznať: žiadosť môže mať v databáze zapísané
+`PENDING_APPROVAL`, hoci sa podľa pravidiel už správa ako `EXPIRED`, a to až
+dovtedy, kým o ňu niekto nepožiada. Pre správanie systému to nič nemení, pre
+čitateľa databázy áno. Dávkové dočisťovanie je rozhodnutie architektúry
+v C03 — TBD-08.
+
+**Ako sa o vypršaní dozvie žiadateľ.** Nijako — a to je diera, ktorú
+priznávame: systém v tejto fáze nemá operáciu „prečítaj rezerváciu“ ani
+oznámenie pri vypršaní. Žiadateľ vypršanie zistí len tak, že sa pokúsi
+o operáciu, ktorá skončí `EXPIRED`. Viď TBD-09.
 
 ---
 
@@ -372,7 +411,7 @@ neprepisuje.
 `currentTime < starts_at` **neplatí**: otázka „bol prístroj v utorok o desiatej
 obsadený a kým“ je legitímna a systém na ňu vie odpovedať z tých istých dát.
 Rozdiel je zámerný — OP-01 mení stav do budúcnosti, OP-02 iba číta (nález N-02,
-časť 8).
+časť 9).
 
 **Odkaz na pravidlá:** BR-01, BR-02, BR-05, BR-08.
 
@@ -459,20 +498,28 @@ Oprávnený používateľ požiada o potvrdenie rezervácie `X`.
 **Pozorovateľné požiadavky:**
 
 > **REQ-04** *(zmenené v v0.2)***:** Systém prijme potvrdenie rezervácie v stave
-> `DRAFT`, len ak je jej prístroj aktívny (BR-05), používateľ má platný
-> certifikát na kategóriu prístroja (BR-04) a interval rezervácie sa neprekrýva
-> so žiadnou existujúcou rezerváciou toho istého prístroja v blokujúcom stave
-> (BR-02).
+> `DRAFT`, len ak je jej prístroj aktívny (BR-05), **vlastník rezervácie** má
+> platný certifikát na kategóriu prístroja (BR-04) a interval rezervácie sa
+> neprekrýva so žiadnou existujúcou rezerváciou toho istého prístroja
+> v blokujúcom stave, teda ani so **živou** žiadosťou (BR-02, BR-08).
 
 > **REQ-10** *(nové v v0.2)***:** Výsledný stav závisí od prístroja: ak
 > `Instrument.requires_approval` neplatí, rezervácia prejde do `CONFIRMED`; ak
 > platí, prejde do `PENDING_APPROVAL`. Systém v odpovedi vráti dosiahnutý stav,
 > aby používateľ vedel, či má prístroj pridelený, alebo naň čaká.
 
-> **REQ-05** *(zmenené v v0.2)***:** Pri súbežných pokusoch o potvrdenie, ktoré
-> sú navzájom v konflikte podľa BR-02, dosiahne blokujúci stav (`CONFIRMED`
-> alebo `PENDING_APPROVAL`) **najviac jedna** rezervácia. Ostatné skončia
-> zamietnutím a zostanú v stave `DRAFT`.
+> **REQ-05** *(zmenené v v0.2)***:** Pri súbežných pokusoch **potvrdiť alebo
+> schváliť** rezervácie, ktoré sú navzájom v konflikte podľa BR-02, dosiahne
+> blokujúci stav (`CONFIRMED` alebo `PENDING_APPROVAL`) **najviac jedna**
+> z nich. Ostatné skončia zamietnutím a zostanú v pôvodnom stave — pri
+> potvrdení `DRAFT`, pri schvaľovaní `PENDING_APPROVAL`.
+
+> **REQ-16** *(nové v v0.2)***:** Rezervácia opustí daný stav **najviac raz**,
+> aj keď o ňu súbežne žiadajú dve rôzne operácie. Ak sa stretne zrušenie
+> s potvrdením alebo so schválením tej istej rezervácie, uspeje najviac jedno
+> z nich; druhé skončí zamietnutím podľa už zmeneného zdrojového stavu.
+> Nikdy nenastane stav, v ktorom by používateľ dostal na zrušenie úspech
+> a rezervácia pritom blokovala prístroj.
 
 > **REQ-06:** Rezerváciu, ktorej začiatok už nastal, nemožno potvrdiť.
 
@@ -500,7 +547,8 @@ Oprávnený používateľ požiada o potvrdenie rezervácie `X`.
 2. Systém nájde rezerváciu a overí oprávnenie.
 3. Systém overí, že rezervácia je v stave `DRAFT` a jej začiatok ešte nenastal.
 4. Systém overí, že prístroj je aktívny.
-5. Systém overí certifikát používateľa na kategóriu prístroja (BR-04).
+5. Systém overí certifikát **vlastníka rezervácie** na kategóriu prístroja
+   (BR-04) — nie žiadateľa, ktorý môže byť vedúci (BR-06).
 6. Systém overí, že interval nekoliduje so žiadnou rezerváciou toho istého
    prístroja v blokujúcom stave (BR-02, BR-08).
 7. Systém nastaví `state = PENDING_APPROVAL`, ak prístroj vyžaduje schválenie,
@@ -519,7 +567,9 @@ Oprávnený používateľ požiada o potvrdenie rezervácie `X`.
 - prekryv s rezerváciou v blokujúcom stave → zamietnuté, zostáva `DRAFT`
   (vrátane prípadu, keď blokuje cudzia **živá žiadosť** — pre žiadateľa je
   výsledok rovnaký ako pri potvrdenej rezervácii, iba dôvod je iný),
-- `currentTime >= starts_at` → zamietnuté, zostáva `DRAFT`.
+- `currentTime >= starts_at` → zamietnuté `ALREADY_STARTED`, zostáva `DRAFT`.
+  Je to iný kód než `START_IN_PAST` pri OP-01: tam ide o chybný **vstup**,
+  tu o uložený stav a čas.
 
 **Príklady overenia:**
 
@@ -538,7 +588,8 @@ už CONFIRMED                                                   → zamietnuté,
 už CANCELLED                                                   → zamietnuté, zostáva CANCELLED
 cudzí študent potvrdzuje cudziu rezerváciu                     → zamietnuté, zostáva DRAFT
 supervisor potvrdzuje cudziu rezerváciu                        → CONFIRMED
-dve súbežné potvrdenia prekrývajúcich sa rezervácií            → najviac jedna CONFIRMED (REQ-05)
+dve súbežné potvrdenia prekrývajúcich sa rezervácií            → najviac jedna v blokujúcom stave (REQ-05)
+súbežné zrušenie a potvrdenie tej istej rezervácie             → uspeje najviac jedno (REQ-16)
 
 --- pridané v v0.2 ---
 
@@ -600,9 +651,11 @@ Oprávnený používateľ požiada o zrušenie rezervácie `X`.
 > **REQ-09:** Zrušenie rezervácie, ktorá už je v stave `CANCELLED`, skončí
 > úspechom a nezmení žiadny stav (idempotencia).
 
-> **REQ-14** *(nové v v0.2)***:** Systém zruší rezerváciu v stave
-> `PENDING_APPROVAL` bez časového obmedzenia; po zrušení prestáva blokovať
-> prístroj a nemožno o nej ďalej rozhodnúť (OP-05). Rezerváciu v stave
+> **REQ-14** *(nové v v0.2)***:** Systém zruší **živú** žiadosť v stave
+> `PENDING_APPROVAL` (BR-08) bez časového obmedzenia; po zrušení prestáva
+> blokovať prístroj a nemožno o nej ďalej rozhodnúť (OP-05). Pokus zrušiť
+> žiadosť, ktorej `starts_at` už nastal, skončí zamietnutím s dôvodom
+> `EXPIRED` a systém jej stav zapíše ako `EXPIRED`. Rezerváciu v stave
 > `REJECTED` alebo `EXPIRED` zrušiť **nemožno** — pokus skončí zamietnutím
 > `INVALID_STATE` a idempotencia podľa REQ-09 sa na tieto stavy nevzťahuje.
 
@@ -610,8 +663,9 @@ Oprávnený používateľ požiada o zrušenie rezervácie `X`.
 - rezervácia existuje,
 - žiadateľ je vlastník alebo `SUPERVISOR` (BR-06),
 - stav je `DRAFT`, `PENDING_APPROVAL`, `CONFIRMED` alebo `CANCELLED`,
-- pre `CONFIRMED` platí časová podmienka BR-03 (pre `DRAFT`
-  a `PENDING_APPROVAL` žiadna neplatí).
+- pre `CONFIRMED` platí 60-minútová podmienka BR-03; pre `PENDING_APPROVAL`
+  platí podmienka živosti `currentTime < starts_at` (BR-08); pre `DRAFT`
+  neplatí žiadna časová podmienka.
 
 **Stav po úspešnom vykonaní:**
 - `state = CANCELLED`,
@@ -640,22 +694,30 @@ Oprávnený používateľ požiada o zrušenie rezervácie `X`.
 - už `CANCELLED` → **úspech bez zmeny** (REQ-09),
 - `REJECTED` alebo `EXPIRED` → zamietnuté `INVALID_STATE`, stav nezmenený (REQ-14),
 - `PENDING_APPROVAL`, ktorej `starts_at` už nastal → žiadosť je vypršaná:
-  systém zapíše `state = EXPIRED` a zrušenie **zamietne** (BR-08, nález N-04).
+  systém zapíše `state = EXPIRED` a zrušenie **zamietne** s dôvodom `EXPIRED`
+  (BR-08, nález N-04). Je to jediné miesto v celej špecifikácii, kde operácia
+  zmení stav a napriek tomu skončí zamietnutím.
 
-Pre `DRAFT` ani `PENDING_APPROVAL` neexistuje časový dôvod zamietnutia —
-zamietnuť sa dá iba neznáma rezervácia alebo neoprávnený žiadateľ.
+Pre `DRAFT` neexistuje časový dôvod zamietnutia — zamietnuť sa dá iba neznáma
+rezervácia alebo neoprávnený žiadateľ. Pre `PENDING_APPROVAL` je jediným
+časovým dôvodom expirácia podľa BR-08, nie lehota podľa BR-03.
 
-**Súbeh s potvrdením (Cancel vs. Confirm nad tou istou rezerváciou):**
-Rezervácia opustí stav `DRAFT` najviac raz; druhá operácia vidí už zmenený
+**Súbeh s potvrdením alebo schválením nad tou istou rezerváciou** (REQ-16):
+Rezervácia opustí daný stav najviac raz; druhá operácia vidí už zmenený
 zdrojový stav a vyhodnotí sa podľa neho:
 
-- zvíťazí *cancel* → rezervácia je `CANCELLED`, následný *confirm* je zamietnutý
-  (zdrojový stav nie je `DRAFT`),
-- zvíťazí *confirm* → rezervácia je `CONFIRMED`, následný *cancel* sa posudzuje
-  podľa prísnejšieho pravidla pre `CONFIRMED` (60 min).
+- zvíťazí *cancel* → rezervácia je `CANCELLED`, následný *confirm* aj *approve*
+  sú zamietnuté (zdrojový stav nesedí),
+- zvíťazí *confirm* na bežnom prístroji → rezervácia je `CONFIRMED`, následný
+  *cancel* sa posudzuje podľa prísnejšieho pravidla pre `CONFIRMED` (60 min),
+- zvíťazí *confirm* na prístroji so schvaľovaním → rezervácia je
+  `PENDING_APPROVAL` a následný *cancel* sa posudzuje podľa BR-08, nie podľa
+  60-minútovej lehoty,
+- zvíťazí *approve* → rezervácia je `CONFIRMED` a platí druhý bod.
 
 Nikdy nenastane stav, v ktorom by rezervácia bola zároveň zrušená aj blokovala
-prístroj.
+prístroj — ani opačne, že by používateľ dostal na zrušenie úspech a rezervácia
+pritom prešla do blokujúceho stavu.
 
 **Príklady overenia:**
 
@@ -717,16 +779,21 @@ schváli ju, alebo zamietne.
 > splnenie podmienok z REQ-11 okrem oprávnenia a živosti žiadosti; po ňom
 > rezervácia prestáva blokovať prístroj.
 
-> **REQ-15:** Pokus rozhodnúť o žiadosti, ktorej `starts_at` už nastal, skončí
-> zamietnutím s dôvodom `EXPIRED`. Systém pritom stav rezervácie zapíše ako
-> `EXPIRED` (BR-08).
+> **REQ-15:** Pokus **oprávneného schvaľovateľa** rozhodnúť — schváliť alebo
+> zamietnuť — o žiadosti, ktorej `starts_at` už nastal, skončí zamietnutím
+> s dôvodom `EXPIRED`. Systém pritom stav rezervácie zapíše ako `EXPIRED`
+> (BR-08). Pokus neoprávneného používateľa skončí skôr, na kontrole
+> oprávnenia, a stav nemení.
 
 **Predpoklady:**
 - rezervácia existuje,
-- `state = PENDING_APPROVAL`,
 - rozhoduje používateľ s rolou `SUPERVISOR`, ktorý nie je vlastníkom
   rezervácie (BR-07),
+- `state = PENDING_APPROVAL`,
 - `currentTime < starts_at` (BR-08).
+
+Oprávnenie sa overuje **pred** stavom, rovnako ako v OP-03 a OP-04: inak by sa
+neoprávnený používateľ z kódu chyby dozvedel stav cudzej rezervácie.
 
 **Stav po úspešnom vykonaní:**
 
@@ -752,8 +819,8 @@ alebo `PENDING_APPROVAL → EXPIRED` pri pokuse o rozhodnutie po `starts_at`
 
 **Hlavný úspešný scenár (schválenie):**
 1. Vedúci odošle `reservation_id`, svoju identitu a rozhodnutie *schváliť*.
-2. Systém nájde rezerváciu a overí, že je v stave `PENDING_APPROVAL`.
-3. Systém overí oprávnenie schvaľovateľa (BR-07).
+2. Systém nájde rezerváciu a overí oprávnenie schvaľovateľa (BR-07).
+3. Systém overí, že rezervácia je v stave `PENDING_APPROVAL`.
 4. Systém odčíta `currentTime` a overí, že žiadosť nevypršala (BR-08).
 5. Systém **znova** overí prístroj (BR-05), certifikát vlastníka (BR-04)
    a prekryv s blokujúcimi rezerváciami (BR-02).
@@ -769,13 +836,14 @@ alebo `PENDING_APPROVAL → EXPIRED` pri pokuse o rozhodnutie po `starts_at`
   nezmenený,
 - vedúci rozhoduje o **vlastnej** žiadosti → zamietnuté `FORBIDDEN`, stav
   nezmenený (BR-07),
-- stav nie je `PENDING_APPROVAL` (napr. `DRAFT`, `CONFIRMED`, `CANCELLED`,
-  `REJECTED`) → zamietnuté `INVALID_STATE`, stav nezmenený,
+- stav nie je `PENDING_APPROVAL` (`DRAFT`, `CONFIRMED`, `CANCELLED`,
+  `REJECTED` aj už zapísaný `EXPIRED`) → zamietnuté `INVALID_STATE`, stav
+  nezmenený,
 - žiadosť vypršala → zamietnuté `EXPIRED`, stav sa mení na `EXPIRED` (REQ-15),
 - prístroj je medzičasom neaktívny → schválenie zamietnuté, žiadosť zostáva
   `PENDING_APPROVAL`,
-- certifikát vlastníka medzičasom vypršal → schválenie zamietnuté, žiadosť
-  zostáva `PENDING_APPROVAL`,
+- certifikát vlastníka medzičasom stratil platnosť (vedúci ho odobral alebo
+  skrátil) → schválenie zamietnuté, žiadosť zostáva `PENDING_APPROVAL`,
 - interval medzičasom obsadila iná potvrdená rezervácia → schválenie zamietnuté
   `OVERLAP`, žiadosť zostáva `PENDING_APPROVAL`.
 
@@ -793,7 +861,7 @@ PENDING_APPROVAL vlastnená supervisorom + ten istý supervisor → zamietnuté 
 PENDING_APPROVAL vlastnená supervisorom + iný supervisor      → CONFIRMED
 PENDING_APPROVAL, currentTime == starts_at          → zamietnuté EXPIRED, stav = EXPIRED (hranica BR-08)
 PENDING_APPROVAL, currentTime == starts_at - 1 s    → CONFIRMED
-PENDING_APPROVAL + certifikát medzitým vypršal      → zamietnuté, zostáva PENDING_APPROVAL
+PENDING_APPROVAL + certifikát medzitým odobratý    → zamietnuté, zostáva PENDING_APPROVAL
 PENDING_APPROVAL + prístroj medzitým deaktivovaný   → zamietnuté, zostáva PENDING_APPROVAL
 PENDING_APPROVAL + interval medzitým potvrdený inde → zamietnuté OVERLAP, zostáva PENDING_APPROVAL
 už CONFIRMED / CANCELLED / REJECTED                 → zamietnuté INVALID_STATE
@@ -805,12 +873,31 @@ Zmenová karta C02 hovorí, že schválenie môže byť **oneskorené, zamietnut
 môže vypršať**. Práve to je dôvod, prečo sa kontroly z OP-03 musia vykonať
 znova: medzi žiadosťou a rozhodnutím ubehne ľubovoľne dlhý čas a svet sa
 medzitým zmení. Keby sa neopakovali, vedúci by jedným kliknutím potvrdil
-rezerváciu, ktorá porušuje BR-04 alebo BR-05.
+rezerváciu, ktorá porušuje BR-04, BR-05 alebo BR-02.
+
+**Pozor na presnú formuláciu pri certifikáte.** BR-04 porovnáva `valid_until`
+so `starts_at` rezervácie — dva uložené údaje. Samotným plynutím času sa teda
+výsledok tejto kontroly zmeniť **nemôže**; zmeniť sa musí **záznam**
+certifikátu, a to sa stane, keď vedúci certifikát odoberie alebo skráti jeho
+platnosť (certifikáty eviduje ručne, C01). Opakovaná kontrola BR-04 pri
+schválení chráni presne pred týmto, nie pred „vypršaním počas čakania“.
+U BR-05 a BR-02 je to inak — tam stačí, že sa medzičasom zmení stav prístroja
+alebo pribudne iná rezervácia.
 
 Schválenie a zamietnutie sú **jedna operácia s dvoma výsledkami**, nie dve
 operácie: je to jeden cieľ aktéra — rozhodnúť o žiadosti — s rovnakými
 predpokladmi. `Cancel` je oproti `Confirm` samostatná operácia práve preto, že
 je to iný cieľ iného človeka v inom okamihu.
+
+**Prijatý dôsledok (nález N-06):** vedúci smie schváliť žiadosť kedykoľvek do
+`starts_at` — teda aj desať minút pred začiatkom. Taká rezervácia prejde do
+`CONFIRMED` a podľa BR-03 ju už **nikto nezruší**, ani žiadateľ.
+
+Nie je to ten istý prípad, ktorý obhájil nález N-01: tam neskorý prechod
+vykonal sám žiadateľ, takže mu nemohol byť proti vôli. Tu ho vykoná niekto iný.
+Prijímame to napriek tomu, lebo žiadateľ má celý čas čakania možnosť žiadosť
+zrušiť bez akejkoľvek lehoty (REQ-14) — kto prístroj už nechce, nemusí čakať
+na rozhodnutie. Kto žiadosť nechá žiť, dáva najavo, že prístroj stále chce.
 
 **Predpoklad / neznáma:** TBD-07.
 
@@ -827,7 +914,8 @@ je to iný cieľ iného človeka v inom okamihu.
 | TBD-05 | Zobrazenie lokálneho času používateľovi — databáza vracia UTC (nález C01 spiku).             | otvorené; pravdepodobne pásmo na `Instrument` |
 | TBD-06 | Autentifikácia. Špecifikácia predpokladá dôveryhodné `user_id` v požiadavke (BR-06).         | mimo rozsah predmetu                         |
 | TBD-07 | Žiadosť vedúceho laboratória, ak je v laboratóriu jediný — podľa BR-07 ju nemá kto schváliť a prepadne. | otvorené; rieši sa personálne (druhý schvaľovateľ), nie zmenou pravidla *(v0.2)* |
-| TBD-08 | Dočisťovanie vypršaných žiadostí: stav `EXPIRED` sa dnes zapíše až pri operácii, ktorá záznam číta. | otvorené; dávka alebo plánovač je rozhodnutie C03 *(v0.2)* |
+| TBD-08 | Dočisťovanie vypršaných žiadostí: stav `EXPIRED` sa dnes zapíše až pri operácii, ktorá na žiadosť smeruje. | otvorené; dávka alebo plánovač je rozhodnutie C03 *(v0.2)* |
+| TBD-09 | Systém nemá operáciu na **čítanie** rezervácií ani zoznam čakajúcich žiadostí. Žiadateľ sa o vypršaní a vedúci o novej žiadosti nedozvedia inak než cez Notification Service (TBD-03). | otvorené; ovplyvní použiteľnosť celého schvaľovacieho toku *(v0.2)* |
 
 Žiadna z týchto položiek nie je doplnená vymyslenou hodnotou. Ak sa v texte
 objaví číslo (60 minút v BR-03), má zdroj — je to rozhodnutie tímu, nie odhad.
@@ -838,9 +926,14 @@ Expirácia žiadosti (BR-08) zámerne **žiadne nové číslo nezavádza**: via�
 
 ## 9. Kontrola konzistencie špecifikácie ako celku
 
-Špecifikáciu sme kontrolovali ako **jeden systém tvrdení**, nie ako štyri
-nezávislé texty. Kontrola prebehla po dopísaní diagramov, teda nad textom
-aj obrázkami naraz.
+Špecifikáciu sme kontrolovali ako **jeden systém tvrdení**, nie ako izolované
+texty. Kontrola prebehla po dopísaní diagramov, teda nad textom aj obrázkami
+naraz.
+
+> **Nasledujúca tabuľka je záznam kontroly pri baseline v0.1** a hovorí o štyroch
+> operáciách a o blokujúcom stave `{CONFIRMED}`. Nechávame ju tak, ako vznikla —
+> je to doklad o tom, čo sme kontrolovali vtedy. Stav po zmene je v tabuľke
+> „Kontrola konzistencie po zmene v0.2“ nižšie.
 
 | Kontrola                        | Výsledok                                                                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -916,7 +1009,7 @@ neplatili automaticky.
 | Use case diagram vs. text | ✅ Nový cieľ „rozhodnúť o žiadosti“ má špecifikované chovanie (OP-05); nový aktér nevznikol. |
 | Stavový diagram vs. text | ✅ Šesť stavov, všetky prechody v texte aj v diagrame vrátane `PENDING_APPROVAL → EXPIRED`. |
 | Požiadavka vs. návrhové rozhodnutie | ✅ REQ-15 popisuje pozorovateľný výsledok pokusu o rozhodnutie, nie plánovač. Ako sa `EXPIRED` dočistí, je otázka C03 (TBD-08). |
-| Nejistota vs. vymyslená presnosť | ✅ Expirácia nezaviedla žiadne nové číslo — viaže sa na `starts_at`. Alternatíva „48 hodín“ bola zamietnutá práve preto, že by číslo nemalo zdroj. |
+| Neistota vs. vymyslená presnosť | ✅ Expirácia nezaviedla žiadne nové číslo — viaže sa na `starts_at`. Alternatíva „48 hodín“ bola zamietnutá práve preto, že by číslo nemalo zdroj. |
 
 **N-04 — Zrušenie vypršanej žiadosti si odporovalo s expiráciou.**
 BR-03 dovoľuje zrušiť `PENDING_APPROVAL` kedykoľvek. BR-08 hovorí, že žiadosť
@@ -936,6 +1029,41 @@ záznam. Bez explicitného stanoviska by si to niekto domyslel.
 pretože iba ten blokuje prístroj. `DRAFT` ostáva presne taký, aký bol po
 náleze N-03.
 
+### Kontrola po nezávislej revízii v0.2
+
+Baseline v0.2 sme po dopísaní dali skontrolovať ešte raz, nezávisle od toho,
+kto ju písal. Revízia našla **šesť skutočných rozporov** — všetky vznikli tým,
+že oprava nálezu N-04 sa premietla len do časti dokumentu. Uvádzame ich, lebo
+sú to presne tie chyby, ktoré by inak prežili do C03:
+
+| # | Čo bolo zle | Ako je to vyriešené |
+| - | ----------- | ------------------- |
+| R-1 | BR-03 a REQ-14 stále tvrdili, že `PENDING_APPROVAL` sa ruší „vždy, bez časovej podmienky“, kým chybový zoznam OP-04 hovoril opak (nález N-04). Kto implementuje podľa pravidiel — čo je správny postup — dostane opačné správanie. | BR-03, REQ-14 aj predpoklady OP-04 prepísané. |
+| R-2 | Definícia blokujúcich stavov a BR-02 neobsahovali podmienku živosti, hoci REQ-03 áno. Podľa doslovného znenia BR-02 bolo možné invariant porušiť vypršanou žiadosťou. | Živosť je odteraz súčasťou definície aj invariantu; dôsledok (v databáze môže ležať vypršaná žiadosť prekrývajúca sa s potvrdenou rezerváciou) je pomenovaný. |
+| R-3 | REQ-05 hovorila len o potvrdení a o návrate do `DRAFT`, hoci OP-05 sa na ňu odvolávala pri súbežných schváleniach. | REQ-05 rozšírená na potvrdenie aj schválenie. |
+| R-4 | BR-08 sľubovalo, že `EXPIRED` sa zapíše „pri najbližšej operácii, ktorá záznam číta“ — OP-02 ho však výslovne nezapisuje a OP-03 o tom mlčal. | BR-08 rozlišuje **vyhodnotenie** (každá operácia) od **zápisu** (iba OP-04 a OP-05). |
+| R-5 | Zdôvodnenie opakovanej kontroly pri schválení tvrdilo, že „certifikát mohol medzitým vypršať“. BR-04 porovnáva dva uložené údaje, takže plynutím času sa jeho výsledok zmeniť nemôže. | Zdôvodnenie opravené: chráni pred **zmenou záznamu** certifikátu, nie pred plynutím času. Kontrola zostáva. |
+| R-6 | OP-05 kontrolovala stav pred oprávnením, kým OP-03 a OP-04 naopak. Neoprávnený používateľ sa z kódu chyby dozvedel stav cudzej rezervácie. | Poradie zjednotené: oprávnenie najprv. |
+
+Okrem toho revízia odkryla dve veci o správaní systému:
+
+**N-06 — neskoré schválenie vyrobí nezrušiteľnú rezerváciu.** Vedúci smie
+schváliť žiadosť aj desať minút pred začiatkom; taká rezervácia sa už podľa
+BR-03 nedá zrušiť. Nie je to ten istý prípad, ktorý obhájil N-01 (tam neskorý
+prechod urobil sám žiadateľ). *Vyriešené:* prijaté a pomenované v OP-05 —
+žiadateľ má po celý čas čakania možnosť žiadosť bez lehoty zrušiť.
+
+**N-07 — stratený zápis nad tou istou rezerváciou.** Špecifikácia v OP-04
+tvrdila, že „rezervácia opustí stav `DRAFT` najviac raz“, ale toto tvrdenie
+nebolo požiadavkou a nikto ho neoveroval. Súbežné zrušenie a potvrdenie tej
+istej rezervácie **obe uspejú**: používateľ dostane na zrušenie úspech a
+rezervácia pritom blokuje prístroj. Je to iné okno než REQ-05 — medzi
+kontrolou **zdrojového stavu** a zápisom — a týka sa aj zrušenia, kde REQ-05
+nefiguruje.
+*Vyriešené:* tvrdenie sa stalo požiadavkou **REQ-16** a dostalo spustiteľný
+dôkaz (`tests/test_concurrency_req05.py`, xfail). Implementácia ju zatiaľ
+nespĺňa — je to druhý architektonický driver pre C03.
+
 ---
 
 ## 10. Kontrola prijatia požiadaviek
@@ -952,13 +1080,14 @@ operácie.
 | REQ-02 | nie                                                                | nie                                                                     | `DRAFT` vznikne aj pri prekryve a bez certifikátu      |
 | REQ-03 | áno — hranice intervalu (dotyk zľava/sprava), množina stavov       | nie — čítacia operácia, ale výsledok môže zastarať hneď po odpovedi¹    | tri hraničné dopyty okolo `CONFIRMED` [10:00,11:00)    |
 | REQ-04 | áno — stav `DRAFT`, `now < starts_at`, platnosť certifikátu        | **áno** — dve potvrdenia môžu súčasne prejsť kontrolou prekryvu         | potvrdenie pri prekryve zamietnuté, stav zostáva `DRAFT` |
-| REQ-05 | áno — týka sa práve okamihu medzi kontrolou a zápisom              | **áno, toto je jeho jediný obsah**                                      | dve súbežné potvrdenia → najviac jedno `CONFIRMED`     |
+| REQ-05 | áno — týka sa práve okamihu medzi kontrolou prekryvu a zápisom      | **áno, toto je jeho jediný obsah**                                      | dve súbežné potvrdenia aj dve súbežné schválenia → najviac jedna rezervácia v blokujúcom stave |
+| REQ-16 | áno — okamih medzi kontrolou zdrojového stavu a zápisom             | **áno, toto je jeho jediný obsah**                                      | súbežné zrušenie a potvrdenie tej istej rezervácie → uspeje najviac jedno |
 | REQ-06 | áno — hranica `now < starts_at`                                    | hraničný prípad: potvrdenie v okamihu `starts_at` závisí od jedného odčítania času | potvrdenie po začiatku zamietnuté            |
 | REQ-07 | nie — pre `DRAFT` neplatí žiadna lehota (po N-03)                  | zriedkavo: súbeh s `Confirm` — riešené v OP-04, časť „Súbeh s potvrdením“ | zrušenie `DRAFT` pred aj po začiatku prejde          |
 | REQ-08 | áno — hranica presne 60:00 min                                     | ako REQ-07                                                              | 60:00 zamietnuté, 60:01 prejde                        |
 | REQ-09 | nie                                                                | nie — opakovanie nie je novou zmenou stavu                              | druhé zrušenie vráti úspech a stav zostáva `CANCELLED` |
 | REQ-10 | nie — závisí od príznaku prístroja, nie od času                     | nie — výsledný stav nezávisí od iných rezervácií                        | prístroj s `requires_approval` → `PENDING_APPROVAL`, bez neho → `CONFIRMED` |
-| REQ-11 | áno — živosť žiadosti, platnosť certifikátu **v čase rozhodnutia**  | **áno** — dve schválenia kolidujúcich žiadostí, rovnaké okno ako REQ-05 | schválenie po vypršaní certifikátu zamietnuté, žiadosť zostáva `PENDING_APPROVAL` |
+| REQ-11 | áno — živosť žiadosti; certifikát a stav prístroja sa čítajú **v čase rozhodnutia**, hoci samotná podmienka BR-04 od času nezávisí | **áno** — dve schválenia kolidujúcich žiadostí, rovnaké okno ako REQ-05 | schválenie po vypršaní certifikátu zamietnuté, žiadosť zostáva `PENDING_APPROVAL` |
 | REQ-12 | áno — iba pre živú žiadosť                                          | nie — zamietnutie nikdy nevytvára alokáciu                              | zamietnutie → `REJECTED`, prístroj je `AVAILABLE` |
 | REQ-13 | nie                                                                | nie — čítacia operácia                                                  | dôvod `PENDING_APPROVAL` vs. `CONFIRMED` v odpovedi OP-02 |
 | REQ-14 | áno — pre `PENDING_APPROVAL` platí BR-08, nie lehota                | súbeh so schválením: rezervácia opustí `PENDING_APPROVAL` najviac raz   | zrušenie žiadosti prejde; zrušenie `REJECTED` skončí `INVALID_STATE` |

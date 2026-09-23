@@ -1,4 +1,4 @@
-"""HTTP vrstva nad styrmi operaciami. Tenka: parsuje vstup, odcita cas,
+"""HTTP vrstva nad piatimi operaciami (baseline v0.2). Tenka: parsuje vstup, odcita cas,
 zavola sluzbu a prelozi vysledok.
 
 Ziadne business pravidlo tu nesmie vzniknut - ak by tu bolo, specifikacia

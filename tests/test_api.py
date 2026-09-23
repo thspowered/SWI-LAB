@@ -1,4 +1,4 @@
-"""Styri operacie cez HTTP - dokaz, ze aplikacia je skutocne spustitelna
+"""Zakladne operacie cez HTTP - dokaz, ze aplikacia je skutocne spustitelna
 a ze spravanie z docs/specification.md je pozorovatelne zvonku.
 
 Pre kazdu operaciu jeden uspesny a jeden negativny / hranicny priklad.

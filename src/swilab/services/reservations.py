@@ -229,7 +229,8 @@ def confirm_reservation(
         )
     if now >= reservation.starts_at:
         raise DomainError(
-            ErrorCode.START_IN_PAST, "rezervaciu po jej zaciatku uz nemozno potvrdit"
+            ErrorCode.ALREADY_STARTED,
+            "rezervaciu po jej zaciatku uz nemozno potvrdit",
         )
 
     instrument = _require_instrument(session, reservation.instrument_id)
@@ -353,23 +354,24 @@ def decide_reservation(
     jeden ciel aktera - rozhodnut o ziadosti - s rovnakymi predpokladmi.
 
     Kontroly BR-04, BR-05 a BR-02 sa tu opakuju, hoci prebehli uz pri
-    podani ziadosti. Medzitym ubehol lubovolne dlhy cas: certifikat mohol
-    vyprsat, pristroj ist do servisu, termin obsadit niekto iny.
+    podani ziadosti. Medzitym ubehol lubovolne dlhy cas: zaznam certifikatu
+    sa mohol zmenit, pristroj ist do servisu, termin obsadit niekto iny.
+
+    Rovnaka medzera v subehu ako pri confirm_reservation (REQ-05): medzi
+    kontrolou prekryvu a zapisom je okno. Navyse plati strata zapisu nad
+    tou istou rezervaciou - viz tests/test_concurrency_req05.py.
     """
     reservation = session.get(Reservation, reservation_id)
     if reservation is None:
         raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
 
-    if reservation.state is not ReservationState.PENDING_APPROVAL:
-        raise DomainError(
-            ErrorCode.INVALID_STATE,
-            f"rozhodnut mozno iba o ziadosti v stave PENDING_APPROVAL, "
-            f"nie {reservation.state}",
-        )
-
     # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost. Bez
     # druhej podmienky by schvalovanie pre veduceho neexistovalo a pravidlo
     # by platilo len pre studentov.
+    #
+    # Opravnenie sa overuje PRED stavom, rovnako ako v OP-03 a OP-04: inak
+    # by sa neopravneny pouzivatel z kodu chyby dozvedel stav cudzej
+    # rezervacie.
     approver = _require_user(session, requested_by)
     if approver.role is not UserRole.SUPERVISOR:
         raise DomainError(
@@ -378,6 +380,13 @@ def decide_reservation(
     if reservation.user_id == approver.id:
         raise DomainError(
             ErrorCode.FORBIDDEN, "veduci nesmie rozhodovat o vlastnej ziadosti"
+        )
+
+    if reservation.state is not ReservationState.PENDING_APPROVAL:
+        raise DomainError(
+            ErrorCode.INVALID_STATE,
+            f"rozhodnut mozno iba o ziadosti v stave PENDING_APPROVAL, "
+            f"nie {reservation.state}",
         )
 
     # REQ-15: vyprsana ziadost sa nedostane k rozhodnutiu, ale stav sa

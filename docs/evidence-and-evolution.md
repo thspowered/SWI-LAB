@@ -145,7 +145,8 @@ Hraničné prípady, ktoré sme overili zámerne, lebo práve na nich sa
   už platný (BR-04),
 - zrušenie potvrdenej rezervácie presne 60:00 min pred začiatkom je
   **zamietnuté**, 60:00:01 prejde (BR-03),
-- `DRAFT` ani `CANCELLED` neblokujú dostupnosť; blokuje iba `CONFIRMED` (BR-02),
+- `DRAFT` ani `CANCELLED` neblokujú dostupnosť (v v0.1 blokoval iba
+  `CONFIRMED`; od v0.2 aj živá žiadosť — BR-02),
 - `Create` vytvorí `DRAFT` aj pri úplnom prekryve a bez certifikátu (REQ-02) —
   test je poistkou proti tichému presunu kontrol do `Create`.
 
@@ -155,7 +156,7 @@ Hraničné prípady, ktoré sme overili zámerne, lebo práve na nich sa
 N-01 (potvrdenie na poslednú chvíľu vyrobí nezrušiteľnú rezerváciu — dôsledok
 prijatý a pomenovaný), N-02 (dopyt na dostupnosť v minulosti nebol rozhodnutý —
 povolený), N-03 (`DRAFT` po začiatku by ostal zaseknutý — zmenené pravidlo
-BR-03). Podrobne v časti 8 špecifikácie.
+BR-03). Podrobne v časti 9 špecifikácie.
 
 **Počas implementácie** — jeden nesúlad, tentoraz v prostredí, nie v kóde:
 editable install prestal fungovať, lebo `.pth` súbor v `site-packages` mal
@@ -189,7 +190,7 @@ systému, iba spoľahlivo vyvolá poradie, ktoré v prevádzke nastane samo.
 
 ## Zostávajúce predpoklady / neznáme
 
-TBD-01 až TBD-06 v časti 7 špecifikácie. Najpodstatnejšie pre ďalšie cvičenia:
+TBD-01 až TBD-09 v časti 8 špecifikácie. Najpodstatnejšie pre ďalšie cvičenia:
 
 - **TBD-03** Notification Service — hranica je definovaná, volanie nie je
   implementované (v diagramoch aktivít vyznačené prerušovanou čiarou),
@@ -232,7 +233,7 @@ aby bolo v histórii vidieť poradie.
 | R-2 | `PENDING_APPROVAL` **blokuje** prístroj | vedúci nikdy nedostane dve žiadosti na ten istý čas |
 | R-3 | Žiadosť vyprší pri `starts_at` | hranica odvodená z dát — žiadne vymyslené číslo |
 | R-4 | Zamietnutie končí v `REJECTED` | rozhodnutie človeka má zostať v histórii |
-| R-5 | `PENDING_APPROVAL` sa ruší bez lehoty | žiadosť ešte nie je prísľub, BR-03 nemá čo chrániť |
+| R-5 | `PENDING_APPROVAL` sa ruší bez lehoty | žiadosť ešte nie je prísľub, BR-03 nemá čo chrániť. **Neskôr zúžené nálezom N-04:** vypršaná žiadosť sa zrušiť nedá, lebo predmet zrušenia zanikol. |
 
 ### Čo zmena zasiahla
 
@@ -241,7 +242,7 @@ aby bolo v histórii vidieť poradie.
 - **Požiadavky:** zmenené REQ-03, REQ-04, REQ-05; nové REQ-10 až REQ-15.
 - **Operácie:** OP-02, OP-03, OP-04 upravené; **nová OP-05**.
 - **Diagramy:** use case (nový cieľ, nie nový aktér), stavový diagram (3 nové
-  stavy, 4 nové prechody), aktivity OP-02/03/04 + nová aktivita OP-05.
+  stavy, 5 nových prechodov), aktivity OP-02/03/04 + nová aktivita OP-05.
 - **Kód:** `ReservationState` (+3 hodnoty), `Instrument.requires_approval`,
   `rules.approval_request_is_alive`, `services.decide_reservation`, dva nové
   endpointy, `check_availability` dostáva čas.
@@ -308,3 +309,84 @@ schvaľovateľ), nie zmenou pravidla.
 
 Vetvy `feature/c02-baseline` → `feature/c02-app` → `feature/c02-approval`
 (PR #3, #4, #5). Tag sa nastaví po zlúčení do `main`.
+
+
+---
+
+## Nezávislá revízia baseline v0.2
+
+Po dokončení zmeny sme špecifikáciu aj implementáciu dali skontrolovať
+nezávisle od toho, kto ich písal. Revízia našla nálezy, ktoré by inak prežili
+do C03. Tu je to podstatné — celý zoznam a spôsob riešenia je v časti 9
+špecifikácie.
+
+### Najvážnejší nález: test, ktorý nič netestoval
+
+Pri zmene v0.2 sme premenovali internú funkciu služby
+`_overlapping_confirmed` → `_overlapping_blocking`. Test súbehu
+(`tests/test_concurrency_req05.py`) na ňu siahal starým menom a padal na
+`AttributeError` **ešte pred spustením vlákien**. Keďže bol označený
+`xfail(strict=True)`, pytest zlyhanie prijal ako očakávané a **sada zostala
+zelená**.
+
+Dôsledky, ktoré si zaslúžia byť napísané:
+
+1. Test by „prešiel“ pri ľubovoľnej implementácii — správnej aj rozbitej.
+2. Poistka, ktorú sme sľubovali („keď sa medzera zavrie, test začne
+   prechádzať a `strict=True` na to upozorní“), by nevystrelila nikdy.
+3. Tento dokument citoval ako dôkaz výstup, ktorý sa v tom čase **nedal
+   zreprodukovať spustením testu**.
+
+*Vyriešené:* inštrumentácia sa inštaluje vo **fixture** — zlyhanie tam pytest
+hlási ako ERROR, ktorý `xfail` neprehltne. Pribudol strážny test
+`test_instrumentacia_sedi_s_kodom`, ktorý padne, keď sa funkcia premenuje.
+Ponaučenie je všeobecnejšie: `xfail(strict=True)` je užitočný na doloženie
+známej medzery, ale zakrýva **každé** iné zlyhanie toho testu.
+
+### Druhý nález: medzera, o ktorej sme nevedeli
+
+Revízia ukázala, že súbežné **zrušenie a potvrdenie tej istej rezervácie** obe
+uspejú:
+
+```
+AssertionError: rezervacia opustila DRAFT dvakrat: obe operacie vratili uspech
+['OK', 'OK'], konecny stav je CONFIRMED - pouzivatel si mysli, ze zrusil
+rezervaciu, ktora blokuje pristroj
+```
+
+Špecifikácia v OP-04 tvrdila presný opak — lenže to tvrdenie nebolo
+požiadavkou a nikto ho neoveroval.
+
+*Vyriešené:* tvrdenie sa stalo požiadavkou **REQ-16** a dostalo spustiteľný
+dôkaz. Nie je to to isté ako REQ-05: tam ide o okno medzi kontrolou **prekryvu**
+a zápisom nad dvoma rôznymi rezerváciami, tu o okno medzi kontrolou
+**zdrojového stavu** a zápisom nad jednou — a týka sa aj zrušenia, kde REQ-05
+nefiguruje vôbec.
+
+### Šesť rozporov v špecifikácii
+
+Všetky vznikli tým, že oprava nálezu N-04 sa premietla len do časti dokumentu:
+BR-03 a REQ-14 stále tvrdili opak chybového zoznamu OP-04; definícia blokujúcich
+stavov a BR-02 nemali podmienku živosti; REQ-05 nepokrývala schvaľovanie; BR-08
+sľubovalo zápis `EXPIRED` aj tam, kde sa nedeje; zdôvodnenie opakovanej
+kontroly certifikátu tvrdilo niečo, čo sa plynutím času stať nemôže; OP-05
+kontrolovala stav pred oprávnením a tým prezrádzala stav cudzej rezervácie.
+Podrobne v časti 9 špecifikácie, tabuľka R-1 až R-6.
+
+### Čo sa doplnilo v testoch
+
+Revízia našla požiadavky bez pokrytia — najmä **REQ-06** (rezerváciu po
+začiatku nemožno potvrdiť), ktorá nemala ani jeden test, a celú skupinu
+„OP-03 voči novým stavom“. Doplnené; niektoré existujúce testy mali slabé
+tvrdenia (čítali objekt, ktorý služba práve zmutovala, namiesto stavu
+v databáze) a boli spevnené.
+
+### Stav po revízii
+
+```
+86 passed, 3 xfailed
+```
+
+Tri `xfailed` sú tri doložené medzery, všetky s reprodukovateľným výstupom:
+REQ-05 pri potvrdení, REQ-05 pri schvaľovaní (obe vetvy REQ-10) a REQ-16
+(stratený zápis). Všetky tri sú vstup pre C03.

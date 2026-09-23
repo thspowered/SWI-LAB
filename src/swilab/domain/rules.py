@@ -1,4 +1,4 @@
-"""Domenove pravidla BR-01 az BR-04 zo specifikacie baseline v0.1.
+"""Domenove pravidla zo specifikacie baseline v0.2 (BR-01, BR-03, BR-04, BR-08).
 
 Funkcie su ciste: nepoznaju HTTP ani databazu, pracuju iba s hodnotami.
 Kazda nesie v docstringu pravidlo, ktore vynucuje, aby sa dalo prejst od

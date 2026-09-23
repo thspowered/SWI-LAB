@@ -64,8 +64,9 @@ flowchart LR
   k nemu čiaru nemá a mať nesmie (BR-07). Zmena **nepridala nového aktéra** —
   existujúcemu pribudol cieľ.
 - **Notification Service** je podporný externý aktér (hranica z C01). Prerušovaná
-  šípka znamená, že systém ho volá, nie že ho niekto používa. V v0.1 je hranica
-  **definovaná, nie implementovaná** — TBD-03.
+  šípka znamená, že systém ho volá, nie že ho niekto používa. Hranica je
+  **definovaná, nie implementovaná** — TBD-03. Od v0.2 na nej stojí použiteľnosť
+  schvaľovania: bez oznámenia sa vedúci o žiadosti nedozvie (TBD-09).
 - Žiadne `include` / `extend`. Operácie sú navzájom nezávislé ciele; `Confirm`
   síce vnútorne vyhodnocuje to isté pravidlo ako `Check Availability`, ale to je
   zdieľané **pravidlo BR-02**, nie zdieľaný prípad užitia.
@@ -85,7 +86,7 @@ stateDiagram-v2
     PENDING_APPROVAL --> CONFIRMED : approve [supervisor ∧ podmienky stále platia]
     PENDING_APPROVAL --> REJECTED : reject [supervisor]
     PENDING_APPROVAL --> EXPIRED : expire [nastal starts_at]
-    PENDING_APPROVAL --> CANCELLED : cancel / bez časovej podmienky
+    PENDING_APPROVAL --> CANCELLED : cancel [žiadosť ešte nevypršala]
 
     CONFIRMED --> CANCELLED : cancel [zostáva viac ako 60 min]
     CANCELLED --> CANCELLED : cancel / bez efektu (REQ-09)
@@ -98,22 +99,23 @@ stateDiagram-v2
     end note
 
     note right of PENDING_APPROVAL
-        v0.2. Ziadost caka na
-        rozhodnutie veduceho.
-        BLOKUJE pristroj rovnako
-        ako CONFIRMED (BR-02).
+        v0.2. Žiadosť čaká na
+        rozhodnutie vedúceho.
+        Kým nevyprší, BLOKUJE
+        prístroj ako CONFIRMED.
     end note
 
     note left of REJECTED
-        v0.2. Rozhodnutie cloveka.
-        Koncovy stav, neblokuje.
-        Zrusit sa neda (REQ-14).
+        v0.2. Rozhodnutie človeka.
+        Koncový stav, neblokuje.
+        Zrušiť sa nedá (REQ-14).
     end note
 
     note left of EXPIRED
-        v0.2. Jediny prechod, ktory
-        nespusta clovek - nastal
-        starts_at ziadosti (BR-08).
+        v0.2. Jediný prechod, ktorý
+        nespúšťa človek - nastal
+        starts_at žiadosti (BR-08).
+        Zapíšu ho OP-04 a OP-05.
     end note
 
     note left of CANCELLED
@@ -134,7 +136,7 @@ stateDiagram-v2
 | `PENDING_APPROVAL → CONFIRMED`   | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now < starts_at` ∧ `is_active` ∧ certifikát vlastníka stále platí ∧ žiadny prekryv *(v0.2)*               | REQ-11, BR-02/04/05/07/08 |
 | `PENDING_APPROVAL → REJECTED`    | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now < starts_at` *(v0.2)*                                                                                | REQ-12, BR-07, BR-08   |
 | `PENDING_APPROVAL → EXPIRED`     | `now >= starts_at`; zapíše sa pri operácii, ktorá záznam číta *(v0.2)*                                                                         | REQ-15, BR-08          |
-| `PENDING_APPROVAL → CANCELLED`   | žiadateľ oprávnený ∧ žiadosť ešte nevypršala — bez časovej podmienky *(v0.2)*                                                                  | REQ-14, BR-03, BR-06   |
+| `PENDING_APPROVAL → CANCELLED`   | žiadateľ oprávnený ∧ žiadosť ešte nevypršala (BR-08); 60-minútová lehota tu neplatí *(v0.2)*                                                   | REQ-14, BR-03, BR-06, BR-08 |
 | `CONFIRMED → CANCELLED`          | žiadateľ oprávnený ∧ `now + 60 min < starts_at`                                                                                               | REQ-08, BR-03, BR-06   |
 | `CANCELLED → CANCELLED`          | žiadateľ oprávnený — bez zmeny stavu, bez oznámenia                                                                                           | REQ-09                 |
 
@@ -216,7 +218,7 @@ flowchart TD
     X1 --> Z
     X2 --> Z
 
-    N["Operácia je čítacia: nemení žiadny stav.<br/>Vypršané žiadosti sa do kolízií nepočítajú,<br/>ale OP-02 im stav neprepisuje (BR-08)."]
+    N["Operácia je čítacia: nemení žiadny stav.<br/>Vypršané žiadosti sa do kolízií nepočítajú,<br/>ale OP-02 im stav neprepisuje - zapisujú ho<br/>iba OP-04 a OP-05 (BR-08)."]
     F -.- N
 
     classDef rej fill:#ffecec,stroke:#c0392b,color:#300;
@@ -239,10 +241,10 @@ flowchart TD
     D -->|"áno"| E{"state = DRAFT?"}
     E -->|"nie"| X3["Zamietni: INVALID_STATE<br/>stav sa nemení"]
     E -->|"áno"| F{"now < starts_at?<br/>REQ-06"}
-    F -->|"nie"| X4["Zamietni: START_IN_PAST"]
+    F -->|"nie"| X4["Zamietni: ALREADY_STARTED"]
     F -->|"áno"| G{"Prístroj aktívny?<br/>BR-05"}
     G -->|"nie"| X5["Zamietni: INSTRUMENT_INACTIVE"]
-    G -->|"áno"| H{"Certifikát na kategóriu<br/>platný k starts_at?<br/>BR-04"}
+    G -->|"áno"| H{"Certifikát VLASTNÍKA<br/>na kategóriu<br/>platný k starts_at?<br/>BR-04"}
     H -->|"nie"| X6["Zamietni: MISSING_CERTIFICATION"]
     H -->|"áno"| I{"Prekryv s inou rezerváciou<br/>v blokujúcom stave?<br/>BR-02, BR-08"}
     I -->|"áno"| X7["Zamietni: OVERLAP"]
@@ -299,7 +301,7 @@ flowchart TD
     G --> J
     H -->|"nie"| X4["Zamietni: TOO_LATE<br/>zostáva CONFIRMED"]
     H -->|"áno"| J
-    J --> K["Oznámenie do Notification Service<br/>TBD-03 - v0.1 neimplementované"]
+    J --> K["Oznámenie do Notification Service<br/>TBD-03 - neimplementované"]
     K --> L["Vráť aktuálny stav rezervácie"]
     L --> Z([Koniec])
     R1 --> Z
@@ -339,11 +341,11 @@ flowchart TD
     A([Štart]) --> B["Prijmi reservation_id, identitu, rozhodnutie<br/>(schváliť / zamietnuť)"]
     B --> C{"Rezervácia existuje?"}
     C -->|"nie"| X1["Zamietni: NOT_FOUND"]
-    C -->|"áno"| D{"state = PENDING_APPROVAL?"}
-    D -->|"nie"| X2["Zamietni: INVALID_STATE<br/>stav sa nemení"]
-    D -->|"áno"| E{"Rozhoduje SUPERVISOR,<br/>ktorý NIE je vlastník?<br/>BR-07"}
+    C -->|"áno"| E{"Rozhoduje SUPERVISOR,<br/>ktorý NIE je vlastník?<br/>BR-07"}
     E -->|"nie"| X3["Zamietni: FORBIDDEN"]
-    E -->|"áno"| F{"now < starts_at?<br/>BR-08"}
+    E -->|"áno"| D{"state = PENDING_APPROVAL?"}
+    D -->|"nie"| X2["Zamietni: INVALID_STATE<br/>stav sa nemení"]
+    D -->|"áno"| F{"now < starts_at?<br/>BR-08"}
     F -->|"nie"| X4["state = EXPIRED<br/>a zamietni - REQ-15"]
     F -->|"áno"| G{"Rozhodnutie?"}
     G -->|"zamietnuť"| R2["state = REJECTED<br/>prístroj sa uvoľní - REQ-12"]

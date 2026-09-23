@@ -1,10 +1,11 @@
-"""Priklady overenia zo specifikacie baseline v0.1.
+"""Priklady overenia zo specifikacie - zakladne operacie OP-01 az OP-04.
 
 Kazdy test nesie v nazve alebo v docstringu pravidlo alebo poziadavku,
 ktoru overuje. Testy su zamerne pisane proti docs/specification.md, nie
 proti implementacii - ked sa zmeni specifikacia, ma zlyhat test.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -187,15 +188,20 @@ def test_availability_interval_boundaries(
 
 
 @pytest.mark.parametrize(
-    "blocking_state", [ReservationState.DRAFT, ReservationState.CANCELLED]
+    "non_blocking_state", [ReservationState.DRAFT, ReservationState.CANCELLED]
 )
-def test_only_confirmed_blocks(
-    session, make_instrument, make_user, make_reservation, now, tomorrow, blocking_state
+def test_draft_and_cancelled_do_not_block(
+    session, make_instrument, make_user, make_reservation, now, tomorrow,
+    non_blocking_state,
 ):
-    """BR-02: DRAFT ani CANCELLED pristroj nealokuju."""
+    """BR-02: DRAFT ani CANCELLED pristroj neblokuju.
+
+    Blokujuce stavy su od v0.2 dva - PENDING_APPROVAL je overeny
+    v tests/test_approval.py.
+    """
     instrument, user = make_instrument(), make_user()
     starts_at, ends_at = tomorrow
-    make_reservation(instrument, user, starts_at, ends_at, state=blocking_state)
+    make_reservation(instrument, user, starts_at, ends_at, state=non_blocking_state)
 
     result = service.check_availability(
         session,
@@ -615,3 +621,125 @@ def test_cancel_by_foreign_student_is_forbidden(
         )
 
     assert excinfo.value.code is ErrorCode.FORBIDDEN
+
+
+# =========================================================================
+# Chybove vysledky, ktore specifikacia uvadza pri viacerych operaciach
+# =========================================================================
+
+
+def test_confirm_after_start_is_rejected(
+    session, make_instrument, make_user, make_certification, make_reservation, now
+):
+    """REQ-06: rezervaciu, ktorej zaciatok uz nastal, nemozno potvrdit."""
+    instrument, user = make_instrument(), make_user()
+    starts_at = now - MINUTE
+    make_certification(user, instrument.category, starts_at + 24 * HOUR)
+    reservation = make_reservation(instrument, user, starts_at, starts_at + HOUR)
+
+    with pytest.raises(DomainError) as excinfo:
+        service.confirm_reservation(
+            session, reservation_id=reservation.id, requested_by=user.id, now=now
+        )
+
+    assert excinfo.value.code is ErrorCode.ALREADY_STARTED
+    session.refresh(reservation)
+    assert reservation.state is ReservationState.DRAFT
+
+
+def test_confirm_rejects_inactive_instrument(
+    session, make_instrument, make_user, make_certification, make_reservation,
+    now, tomorrow,
+):
+    """BR-05 pri potvrdeni - doteraz overene len pri vytvoreni."""
+    instrument = make_instrument(is_active=False)
+    user = make_user()
+    starts_at, ends_at = tomorrow
+    make_certification(user, instrument.category, ends_at + 24 * HOUR)
+    reservation = make_reservation(instrument, user, starts_at, ends_at)
+
+    with pytest.raises(DomainError) as excinfo:
+        service.confirm_reservation(
+            session, reservation_id=reservation.id, requested_by=user.id, now=now
+        )
+
+    assert excinfo.value.code is ErrorCode.INSTRUMENT_INACTIVE
+    session.refresh(reservation)
+    assert reservation.state is ReservationState.DRAFT
+
+
+@pytest.mark.parametrize(
+    "operation", ["confirm", "cancel"], ids=["OP-03", "OP-04"]
+)
+def test_unknown_reservation_is_rejected(session, make_user, now, operation):
+    """Neznama rezervacia -> NOT_FOUND vo vsetkych operaciach nad nou."""
+    user = make_user()
+    missing_id = uuid.uuid4()
+
+    with pytest.raises(DomainError) as excinfo:
+        if operation == "confirm":
+            service.confirm_reservation(
+                session, reservation_id=missing_id, requested_by=user.id, now=now
+            )
+        else:
+            service.cancel_reservation(
+                session, reservation_id=missing_id, requested_by=user.id, now=now
+            )
+
+    assert excinfo.value.code is ErrorCode.NOT_FOUND
+
+
+def test_unknown_user_is_rejected(session, make_instrument, now, tomorrow):
+    """BR-06: pouzivatel v poziadavke musi existovat."""
+    instrument = make_instrument()
+    starts_at, ends_at = tomorrow
+
+    with pytest.raises(DomainError) as excinfo:
+        service.create_reservation(
+            session,
+            instrument_id=instrument.id,
+            user_id=uuid.uuid4(),
+            starts_at=starts_at,
+            ends_at=ends_at,
+            now=now,
+        )
+
+    assert excinfo.value.code is ErrorCode.UNKNOWN_USER
+
+
+def test_availability_rejects_unknown_instrument(session, now, tomorrow):
+    """OP-02: neznamy pristroj -> zamietnute, NIE 'nedostupny'.
+
+    Systém o takom pristroji nema co tvrdit.
+    """
+    starts_at, ends_at = tomorrow
+
+    with pytest.raises(DomainError) as excinfo:
+        service.check_availability(
+            session,
+            instrument_id=uuid.uuid4(),
+            starts_at=starts_at,
+            ends_at=ends_at,
+            now=now,
+        )
+
+    assert excinfo.value.code is ErrorCode.UNKNOWN_INSTRUMENT
+
+
+def test_availability_rejects_invalid_interval(
+    session, make_instrument, now, tomorrow
+):
+    """OP-02 + BR-01: neplatny interval sa zamieta aj pri citacej operacii."""
+    instrument = make_instrument()
+    starts_at, _ = tomorrow
+
+    with pytest.raises(DomainError) as excinfo:
+        service.check_availability(
+            session,
+            instrument_id=instrument.id,
+            starts_at=starts_at,
+            ends_at=starts_at,
+            now=now,
+        )
+
+    assert excinfo.value.code is ErrorCode.INVALID_INTERVAL

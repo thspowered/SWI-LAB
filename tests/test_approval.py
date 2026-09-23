@@ -254,6 +254,9 @@ def test_rejection_works_even_for_inactive_instrument(
     )
 
     assert result.state is ReservationState.REJECTED
+    # citanie z novej session, nie z objektu, ktory sluzba prave zmutovala
+    session.expire_all()
+    assert session.get(type(request), request.id).state is ReservationState.REJECTED
 
 
 def test_student_cannot_decide(
@@ -297,6 +300,8 @@ def test_supervisor_cannot_decide_own_request(
         )
 
     assert excinfo.value.code is ErrorCode.FORBIDDEN
+    session.refresh(request)
+    assert request.state is ReservationState.PENDING_APPROVAL
 
 
 def test_another_supervisor_may_decide_supervisors_request(
@@ -436,12 +441,15 @@ def test_approval_rechecks_overlap(
         ReservationState.CONFIRMED,
         ReservationState.CANCELLED,
         ReservationState.REJECTED,
+        ReservationState.EXPIRED,
     ],
 )
 def test_decide_requires_pending_state(
     session, guarded_instrument, make_user, make_reservation, supervisor,
     now, tomorrow, state,
 ):
+    """Rozhodovat mozno iba o zivej ziadosti - a stav sa pritom NESMIE
+    zmenit (inak by sa dal zapis EXPIRED vyvolat na comkolvek)."""
     owner = make_user()
     starts_at, ends_at = tomorrow
     reservation = make_reservation(
@@ -455,6 +463,8 @@ def test_decide_requires_pending_state(
         )
 
     assert excinfo.value.code is ErrorCode.INVALID_STATE
+    session.refresh(reservation)
+    assert reservation.state is state
 
 
 # =========================================================================
@@ -624,3 +634,124 @@ def test_http_confirm_on_guarded_instrument_returns_pending(
 
     assert response.status_code == 200
     assert response.json()["state"] == ReservationState.PENDING_APPROVAL.value
+
+
+# =========================================================================
+# OP-03 voci novym stavom - jadro zmeny v potvrdzovacej ceste
+# =========================================================================
+
+
+def test_confirm_rejects_overlap_with_live_request(
+    session, guarded_instrument, make_user, make_certification, make_reservation,
+    now, tomorrow,
+):
+    """BR-02 v0.2: ziva ziadost blokuje potvrdenie rovnako ako CONFIRMED."""
+    first, second = make_user(), make_user()
+    starts_at, ends_at = tomorrow
+    make_certification(second, guarded_instrument.category, ends_at + 24 * HOUR)
+    _pending(make_reservation, guarded_instrument, first, starts_at, ends_at)
+    reservation = make_reservation(guarded_instrument, second, starts_at, ends_at)
+
+    with pytest.raises(DomainError) as excinfo:
+        service.confirm_reservation(
+            session, reservation_id=reservation.id, requested_by=second.id, now=now
+        )
+
+    assert excinfo.value.code is ErrorCode.OVERLAP
+    session.refresh(reservation)
+    assert reservation.state is ReservationState.DRAFT
+
+
+def test_confirm_ignores_expired_request(
+    session, guarded_instrument, make_user, make_certification, make_reservation, now
+):
+    """BR-08: vyprsana ziadost uz potvrdeniu nebrani."""
+    first, second = make_user(), make_user()
+    starts_at = now + timedelta(minutes=30)
+    ends_at = starts_at + HOUR
+    make_certification(second, guarded_instrument.category, ends_at + 24 * HOUR)
+    # ziadost, ktorej termin uz zacal, na prekryvajucom sa intervale
+    make_reservation(
+        guarded_instrument, first, now - HOUR, ends_at,
+        state=ReservationState.PENDING_APPROVAL,
+    )
+    reservation = make_reservation(guarded_instrument, second, starts_at, ends_at)
+
+    result = service.confirm_reservation(
+        session, reservation_id=reservation.id, requested_by=second.id, now=now
+    )
+
+    assert result.state is ReservationState.PENDING_APPROVAL
+
+
+@pytest.mark.parametrize(
+    "dead_state", [ReservationState.REJECTED, ReservationState.EXPIRED]
+)
+def test_confirm_ignores_terminal_states(
+    session, make_instrument, make_user, make_certification, make_reservation,
+    now, tomorrow, dead_state,
+):
+    """Zamietnuta ani vyprsana ziadost potvrdeniu nebrani."""
+    instrument = make_instrument()
+    first, second = make_user(), make_user()
+    starts_at, ends_at = tomorrow
+    make_certification(second, instrument.category, ends_at + 24 * HOUR)
+    make_reservation(instrument, first, starts_at, ends_at, state=dead_state)
+    reservation = make_reservation(instrument, second, starts_at, ends_at)
+
+    result = service.confirm_reservation(
+        session, reservation_id=reservation.id, requested_by=second.id, now=now
+    )
+
+    assert result.state is ReservationState.CONFIRMED
+
+
+def test_confirm_of_pending_request_is_rejected(
+    session, guarded_instrument, make_user, make_reservation, now, tomorrow
+):
+    """Potvrdenie nie je idempotentne ani v ceste cez schvalovanie."""
+    owner = make_user()
+    starts_at, ends_at = tomorrow
+    request = _pending(make_reservation, guarded_instrument, owner, starts_at, ends_at)
+
+    with pytest.raises(DomainError) as excinfo:
+        service.confirm_reservation(
+            session, reservation_id=request.id, requested_by=owner.id, now=now
+        )
+
+    assert excinfo.value.code is ErrorCode.INVALID_STATE
+    session.refresh(request)
+    assert request.state is ReservationState.PENDING_APPROVAL
+
+
+def test_reject_of_expired_request_expires_it(
+    session, guarded_instrument, make_user, make_reservation, supervisor, now
+):
+    """REQ-15 plati pre OBE rozhodnutia, nielen pre schvalenie."""
+    owner = make_user()
+    starts_at = now - HOUR
+    request = _pending(
+        make_reservation, guarded_instrument, owner, starts_at, starts_at + 2 * HOUR
+    )
+
+    with pytest.raises(DomainError) as excinfo:
+        service.decide_reservation(
+            session, reservation_id=request.id, requested_by=supervisor.id,
+            approve=False, now=now,
+        )
+
+    assert excinfo.value.code is ErrorCode.EXPIRED
+    session.refresh(request)
+    assert request.state is ReservationState.EXPIRED
+
+
+def test_decide_unknown_reservation_is_rejected(session, supervisor, now):
+    import uuid
+
+    with pytest.raises(DomainError) as excinfo:
+        service.decide_reservation(
+            session, reservation_id=uuid.uuid4(), requested_by=supervisor.id,
+            approve=True, now=now,
+        )
+
+    assert excinfo.value.code is ErrorCode.NOT_FOUND

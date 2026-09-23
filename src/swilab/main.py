@@ -27,6 +27,7 @@ STATUS_BY_CODE = {
     ErrorCode.OVERLAP: 409,
     ErrorCode.TOO_LATE: 409,
     ErrorCode.EXPIRED: 409,
+    ErrorCode.ALREADY_STARTED: 409,
 }
 
 

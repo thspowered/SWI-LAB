@@ -188,3 +188,26 @@ aktivít OP-05.
 Odhad: zmena sa dotkne zhruba polovice špecifikácie. To nie je známka zlého
 návrhu v0.1 — schvaľovanie mení samotný okamih, v ktorom vzniká alokácia
 prístroja, a to je pojem, na ktorom stojí celý model.
+
+---
+
+## Poznámka po kontrole (doplnené po prepise)
+
+Tento dokument zámerne **neprepisujeme** — je to záznam toho, čo sme si mysleli
+*pred* úpravou špecifikácie, a jeho hodnota je práve v tom, že sa dá porovnať
+so skutočnosťou. Kontrola po prepise ukázala, že analýza sa na dvoch miestach
+netrafila:
+
+1. **BR-05 sme zaradili medzi nezasiahnuté, ale zmenilo sa.** Pribudli mu dva
+   body (nedá sa podať žiadosť ani schváliť čakajúca žiadosť na neaktívnom
+   prístroji). Už v tomto dokumente to bolo vidieť — tabuľka vyššie píše
+   „rovnaké pravidlo, o jeden stav širšie“, čo *je* zmena. Zoznam nezasiahnutých
+   častí sme napísali podľa dojmu, nie podľa vlastnej analýzy.
+2. **Podcenili sme rozsah diagramov.** Analýza hovorí o diagramoch aktivít
+   OP-03 a OP-04; zmeniť sa musel aj diagram aktivít **OP-02**, pretože do
+   vyhodnotenia dostupnosti vstúpil čas.
+
+Obe chyby idú tým istým smerom — analýza rozsah **podcenila**, nie nadhodnotila.
+Pre C03 si z toho berieme, že zoznam „nezasiahnutých“ častí treba odvodzovať
+z pravidiel, nie z pocitu, a že pri zmene významu stavu sa treba prejsť
+**všetky** pohľady, nielen tie, ktoré zmenu spomínajú menom.
