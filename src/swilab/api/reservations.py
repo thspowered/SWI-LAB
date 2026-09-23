@@ -58,6 +58,8 @@ class AvailabilityResponse(BaseModel):
     starts_at: datetime
     ends_at: datetime
     status: Literal["AVAILABLE", "UNAVAILABLE"]
+    #: REQ-13: CONFIRMED (pristroj JE pridelený), PENDING_APPROVAL (niekto
+    #: oň požiadal a čaká sa na vedúceho) alebo INSTRUMENT_INACTIVE.
     reason: str | None = None
     conflicting_reservation_ids: list[uuid.UUID] = []
 
@@ -107,6 +109,7 @@ def check_availability(
         instrument_id=instrument_id,
         starts_at=starts_at,
         ends_at=ends_at,
+        now=clock.now(),
     )
     return {
         "instrument_id": instrument_id,
@@ -150,3 +153,41 @@ def cancel_reservation(
         now=clock.now(),
     )
     return _to_response(result.reservation) | {"changed": result.changed}
+
+
+@router.post(
+    "/reservations/{reservation_id}/approve",
+    response_model=ReservationResponse,
+    summary="OP-05 Approve Reservation - schvalenie",
+)
+def approve_reservation(
+    reservation_id: uuid.UUID, payload: ActorRequest, session: SessionDep
+):
+    reservation = service.decide_reservation(
+        session,
+        reservation_id=reservation_id,
+        requested_by=payload.requested_by,
+        approve=True,
+        now=clock.now(),
+    )
+    return _to_response(reservation)
+
+
+@router.post(
+    "/reservations/{reservation_id}/reject",
+    response_model=ReservationResponse,
+    summary="OP-05 Approve Reservation - zamietnutie",
+)
+def reject_reservation(
+    reservation_id: uuid.UUID, payload: ActorRequest, session: SessionDep
+):
+    """Druhy vysledok tej istej operacie (OP-05, REQ-12) - preto dva
+    endpointy nad jednou funkciou sluzby, nie dve operacie."""
+    reservation = service.decide_reservation(
+        session,
+        reservation_id=reservation_id,
+        requested_by=payload.requested_by,
+        approve=False,
+        now=clock.now(),
+    )
+    return _to_response(reservation)

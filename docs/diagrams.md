@@ -1,9 +1,12 @@
-# Diagramy — Specification Baseline v0.1
+# Diagramy — Specification Baseline v0.2
 
 Vizuálne pohľady na to isté správanie, ktoré popisuje
 [docs/specification.md](specification.md). Diagramy **nedopĺňajú** nové pravidlá:
 každá podmienka v nich má zodpovedajúce `BR-xx` alebo `REQ-xx` v texte. Ak sa
 niekedy rozídu, rozpor sa rieši opravou oboch, nie prekreslením obrázka.
+
+Prvky pridané zmenou v0.2 (schvaľovací proces) sú v texte pod diagramami
+označené *(v0.2)*.
 
 ---
 
@@ -17,12 +20,13 @@ flowchart LR
     supervisor(("Vedúci<br/>laboratória"))
     notif(("Notification<br/>Service"))
 
-    subgraph SYS["Systém SWI-LAB — baseline v0.1"]
+    subgraph SYS["Systém SWI-LAB — baseline v0.2"]
         direction TB
         op1(["OP-01<br/>Vytvoriť rezerváciu"])
         op2(["OP-02<br/>Zistiť dostupnosť"])
         op3(["OP-03<br/>Potvrdiť rezerváciu"])
         op4(["OP-04<br/>Zrušiť rezerváciu"])
+        op5(["OP-05<br/>Rozhodnúť o žiadosti<br/>(schváliť / zamietnuť)"])
     end
 
     student --- op1
@@ -33,13 +37,17 @@ flowchart LR
     supervisor --- op2
     supervisor --- op3
     supervisor --- op4
+    supervisor --- op5
 
     op3 -.->|"oznámenie o potvrdení"| notif
     op4 -.->|"oznámenie o zrušení"| notif
+    op5 -.->|"oznámenie o rozhodnutí"| notif
 
     classDef uc fill:#eef4ff,stroke:#4a6fa5,color:#123;
+    classDef new fill:#e8f5e9,stroke:#2e7d32,color:#032;
     classDef actor fill:#fff,stroke:#333,color:#000;
     class op1,op2,op3,op4 uc;
+    class op5 new;
     class student,supervisor,notif actor;
 ```
 
@@ -52,6 +60,9 @@ flowchart LR
 - **Vedúci laboratória** má tie isté ciele nad **ľubovoľnou** rezerváciou
   (BR-06). Nevytvára rezervácie za iných — preto k `OP-01` nevedie čiara; ak by
   si rezervoval prístroj pre seba, vystupuje v role študenta.
+- **OP-05 je jediný cieľ, ktorý patrí výhradne vedúcemu** *(v0.2)*. Študent
+  k nemu čiaru nemá a mať nesmie (BR-07). Zmena **nepridala nového aktéra** —
+  existujúcemu pribudol cieľ.
 - **Notification Service** je podporný externý aktér (hranica z C01). Prerušovaná
   šípka znamená, že systém ho volá, nie že ho niekto používa. V v0.1 je hranica
   **definovaná, nie implementovaná** — TBD-03.
@@ -65,25 +76,44 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    direction LR
     [*] --> DRAFT : create / BR-01, BR-05, BR-06
 
-    DRAFT --> CONFIRMED : confirm [aktívny prístroj ∧ platný certifikát ∧ bez prekryvu ∧ pred začiatkom]
+    DRAFT --> CONFIRMED : confirm [prístroj NEvyžaduje schválenie ∧ podmienky REQ-04]
+    DRAFT --> PENDING_APPROVAL : confirm [prístroj vyžaduje schválenie ∧ podmienky REQ-04]
     DRAFT --> CANCELLED : cancel / bez časovej podmienky
+
+    PENDING_APPROVAL --> CONFIRMED : approve [supervisor ∧ podmienky stále platia]
+    PENDING_APPROVAL --> REJECTED : reject [supervisor]
+    PENDING_APPROVAL --> EXPIRED : expire [nastal starts_at]
+    PENDING_APPROVAL --> CANCELLED : cancel / bez časovej podmienky
+
     CONFIRMED --> CANCELLED : cancel [zostáva viac ako 60 min]
     CANCELLED --> CANCELLED : cancel / bez efektu (REQ-09)
 
     note right of DRAFT
         Zámer používateľa.
-        Prístroj NEALOKUJE.
+        Prístroj NEBLOKUJE.
         Prekryv ani certifikát
         sa pri create neriešia (REQ-02).
     end note
 
-    note right of CONFIRMED
-        Jediný stav, ktorý alokuje
-        prístroj pre svoj interval.
-        Platí BR-02 (bez prekryvu).
+    note right of PENDING_APPROVAL
+        v0.2. Ziadost caka na
+        rozhodnutie veduceho.
+        BLOKUJE pristroj rovnako
+        ako CONFIRMED (BR-02).
+    end note
+
+    note left of REJECTED
+        v0.2. Rozhodnutie cloveka.
+        Koncovy stav, neblokuje.
+        Zrusit sa neda (REQ-14).
+    end note
+
+    note left of EXPIRED
+        v0.2. Jediny prechod, ktory
+        nespusta clovek - nastal
+        starts_at ziadosti (BR-08).
     end note
 
     note left of CANCELLED
@@ -95,25 +125,33 @@ stateDiagram-v2
 
 **Úplné podmienky prechodov** (skrátené v diagrame, úplné v špecifikácii):
 
-| Prechod                 | Podmienka                                                                                                                     | Zdroj                |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `[*] → DRAFT`           | používateľ existuje ∧ prístroj existuje ∧ `is_active` ∧ `ends_at > starts_at` ∧ `now < starts_at`                              | REQ-01, BR-01/05/06  |
-| `DRAFT → CONFIRMED`     | žiadateľ oprávnený ∧ `now < starts_at` ∧ prístroj `is_active` ∧ platný certifikát na kategóriu ∧ žiadny prekryv s `CONFIRMED`  | REQ-04, BR-02/04/05/06 |
-| `DRAFT → CANCELLED`     | žiadateľ oprávnený — bez časovej podmienky (nález N-03)                                                                        | REQ-07, BR-03, BR-06 |
-| `CONFIRMED → CANCELLED` | žiadateľ oprávnený ∧ `now + 60 min < starts_at`                                                                                | REQ-08, BR-03, BR-06 |
-| `CANCELLED → CANCELLED` | žiadateľ oprávnený — bez zmeny stavu, bez oznámenia                                                                            | REQ-09               |
+| Prechod                          | Podmienka                                                                                                                                     | Zdroj                  |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `[*] → DRAFT`                    | používateľ existuje ∧ prístroj existuje ∧ `is_active` ∧ `ends_at > starts_at` ∧ `now < starts_at`                                              | REQ-01, BR-01/05/06    |
+| `DRAFT → CONFIRMED`              | žiadateľ oprávnený ∧ `now < starts_at` ∧ `is_active` ∧ platný certifikát ∧ žiadny prekryv s blokujúcim stavom ∧ **prístroj nevyžaduje schválenie** | REQ-04, REQ-10, BR-02/04/05/06 |
+| `DRAFT → PENDING_APPROVAL`       | tie isté podmienky ∧ **prístroj vyžaduje schválenie** *(v0.2)*                                                                                | REQ-10, BR-02/04/05/06 |
+| `DRAFT → CANCELLED`              | žiadateľ oprávnený — bez časovej podmienky (nález N-03)                                                                                        | REQ-07, BR-03, BR-06   |
+| `PENDING_APPROVAL → CONFIRMED`   | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now < starts_at` ∧ `is_active` ∧ certifikát vlastníka stále platí ∧ žiadny prekryv *(v0.2)*               | REQ-11, BR-02/04/05/07/08 |
+| `PENDING_APPROVAL → REJECTED`    | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now < starts_at` *(v0.2)*                                                                                | REQ-12, BR-07, BR-08   |
+| `PENDING_APPROVAL → EXPIRED`     | `now >= starts_at`; zapíše sa pri operácii, ktorá záznam číta *(v0.2)*                                                                         | REQ-15, BR-08          |
+| `PENDING_APPROVAL → CANCELLED`   | žiadateľ oprávnený ∧ žiadosť ešte nevypršala — bez časovej podmienky *(v0.2)*                                                                  | REQ-14, BR-03, BR-06   |
+| `CONFIRMED → CANCELLED`          | žiadateľ oprávnený ∧ `now + 60 min < starts_at`                                                                                               | REQ-08, BR-03, BR-06   |
+| `CANCELLED → CANCELLED`          | žiadateľ oprávnený — bez zmeny stavu, bez oznámenia                                                                                           | REQ-09                 |
 
 **Čo v diagrame zámerne nie je:**
 
 - **Zamietnuté pokusy nie sú prechody.** Potvrdenie bez certifikátu alebo
   zrušenie 30 minút pred začiatkom nie je prechod do iného stavu — rezervácia
   zostáva tam, kde bola. Preto v diagrame nie sú slučky pre chybové prípady.
-- **Stav `REJECTED` neexistuje** (rozhodnutie z C01): zamietnutie je výsledok
-  pokusu o prechod, nie stav rezervácie.
-- **Žiadny automatický prechod časom.** `CONFIRMED` rezervácia po skončení
-  intervalu zostáva `CONFIRMED`; v0.1 nepozná stav `COMPLETED` ani plánovač,
-  ktorý by ho nastavoval. Nie je to opomenutie — nič v špecifikácii také
-  správanie nepotrebuje.
+- **`REJECTED` nie je zamietnutý pokus o prechod** *(v0.2)*. Rozhodnutie z C01
+  („žiadny stav `REJECTED`“) stále platí pre neúspešné potvrdenie — tam
+  rezervácia zostáva `DRAFT`. Stav `REJECTED` v0.2 znamená niečo iné:
+  **rozhodnutie človeka**, ktoré má zostať v histórii viditeľné.
+- **Z `REJECTED`, `EXPIRED` ani `CANCELLED` nevedie cesta späť.** Kto chce
+  termín znova, vytvorí novú rezerváciu.
+- **Jediný prechod bez človeka je `PENDING_APPROVAL → EXPIRED`** *(v0.2)*.
+  `CONFIRMED` rezervácia po skončení intervalu zostáva `CONFIRMED`; stav
+  `COMPLETED` neexistuje, pretože ho nič v špecifikácii nepotrebuje.
 - Prechod `CANCELLED → CANCELLED` je v diagrame len preto, že ide
   o **pozorovateľný úspešný výsledok** (REQ-09), nie o chybu.
 
@@ -168,17 +206,17 @@ flowchart TD
     D -->|"nie"| X2["Zamietni: INVALID_INTERVAL"]
     D -->|"áno"| E{"Prístroj aktívny?<br/>BR-05"}
     E -->|"nie"| R1["UNAVAILABLE<br/>dôvod INSTRUMENT_INACTIVE"]
-    E -->|"áno"| F["Nájdi rezervácie prístroja<br/>v stave CONFIRMED,<br/>ktoré sa prekrývajú (BR-01)"]
+    E -->|"áno"| F["Nájdi prekrývajúce sa rezervácie<br/>v blokujúcom stave (BR-01, BR-02):<br/>CONFIRMED, alebo PENDING_APPROVAL<br/>so starts_at v budúcnosti (BR-08)"]
     F --> G{"Našla sa aspoň jedna?"}
     G -->|"nie"| R2["AVAILABLE"]
-    G -->|"áno"| R3["UNAVAILABLE<br/>+ zoznam kolidujúcich id"]
+    G -->|"áno"| R3["UNAVAILABLE<br/>dôvod CONFIRMED alebo PENDING_APPROVAL<br/>+ zoznam kolidujúcich id"]
     R1 --> Z([Koniec])
     R2 --> Z
     R3 --> Z
     X1 --> Z
     X2 --> Z
 
-    N["Operácia je čítacia:<br/>nemení žiadny stav"]
+    N["Operácia je čítacia: nemení žiadny stav.<br/>Vypršané žiadosti sa do kolízií nepočítajú,<br/>ale OP-02 im stav neprepisuje (BR-08)."]
     F -.- N
 
     classDef rej fill:#ffecec,stroke:#c0392b,color:#300;
@@ -206,11 +244,14 @@ flowchart TD
     G -->|"nie"| X5["Zamietni: INSTRUMENT_INACTIVE"]
     G -->|"áno"| H{"Certifikát na kategóriu<br/>platný k starts_at?<br/>BR-04"}
     H -->|"nie"| X6["Zamietni: MISSING_CERTIFICATION"]
-    H -->|"áno"| I{"Prekryv s inou<br/>CONFIRMED rezerváciou?<br/>BR-02"}
+    H -->|"áno"| I{"Prekryv s inou rezerváciou<br/>v blokujúcom stave?<br/>BR-02, BR-08"}
     I -->|"áno"| X7["Zamietni: OVERLAP"]
-    I -->|"nie"| J["state = CONFIRMED"]
-    J --> K["Oznámenie do Notification Service<br/>TBD-03 - v0.1 neimplementované"]
-    K --> L["Vráť aktuálny stav rezervácie"]
+    I -->|"nie"| P{"Prístroj vyžaduje schválenie?<br/>requires_approval, REQ-10"}
+    P -->|"áno"| J2["state = PENDING_APPROVAL<br/>blokuje prístroj, čaká na vedúceho"]
+    P -->|"nie"| J["state = CONFIRMED"]
+    J --> K["Oznámenie do Notification Service<br/>TBD-03 - neimplementované"]
+    J2 --> K
+    K --> L["Vráť DOSIAHNUTÝ stav rezervácie<br/>REQ-10"]
     L --> Z([Koniec])
     X1 --> Z
     X2 --> Z
@@ -227,9 +268,11 @@ flowchart TD
     classDef rej fill:#ffecec,stroke:#c0392b,color:#300;
     classDef note fill:#fffbe6,stroke:#c9a227,color:#332;
     classDef todo fill:#f0f0f0,stroke:#888,color:#333,stroke-dasharray: 4 3;
+    classDef new fill:#e8f5e9,stroke:#2e7d32,color:#032;
     class X1,X2,X3,X4,X5,X6,X7 rej;
     class N note;
     class K todo;
+    class P,J2 new;
 ```
 
 Pri každom zamietnutí zostáva rezervácia v **pôvodnom** stave — `DRAFT` ostáva
@@ -247,9 +290,13 @@ flowchart TD
     D -->|"áno"| E["Odčítaj now JEDENKRÁT<br/>BR-03, zdroj času"]
     E --> F{"Aktuálny stav?"}
     F -->|"CANCELLED"| R1["Úspech bez zmeny stavu<br/>bez oznámenia - REQ-09"]
+    F -->|"REJECTED alebo EXPIRED"| X5["Zamietni: INVALID_STATE<br/>koncový stav - REQ-14"]
     F -->|"DRAFT"| G["Bez časovej podmienky<br/>BR-03, nález N-03"]
+    F -->|"PENDING_APPROVAL"| Q{"now < starts_at?<br/>BR-08"}
     F -->|"CONFIRMED"| H{"now + 60 min < starts_at?"}
-    G --> J["state = CANCELLED"]
+    Q -->|"nie"| X6["state = EXPIRED<br/>a zamietni - nález N-04"]
+    Q -->|"áno"| J["state = CANCELLED"]
+    G --> J
     H -->|"nie"| X4["Zamietni: TOO_LATE<br/>zostáva CONFIRMED"]
     H -->|"áno"| J
     J --> K["Oznámenie do Notification Service<br/>TBD-03 - v0.1 neimplementované"]
@@ -259,6 +306,8 @@ flowchart TD
     X1 --> Z
     X2 --> Z
     X4 --> Z
+    X5 --> Z
+    X6 --> Z
 
     N["Prístroj sa uvoľní až tu:<br/>po prechode do CANCELLED vracia<br/>OP-02 pre ten interval AVAILABLE"]
     J -.- N
@@ -267,11 +316,77 @@ flowchart TD
     classDef ok fill:#eaf7ea,stroke:#27ae60,color:#032;
     classDef note fill:#fffbe6,stroke:#c9a227,color:#332;
     classDef todo fill:#f0f0f0,stroke:#888,color:#333,stroke-dasharray: 4 3;
-    class X1,X2,X4 rej;
+    classDef new fill:#e8f5e9,stroke:#2e7d32,color:#032;
+    class X1,X2,X4,X5,X6 rej;
     class R1 ok;
     class N note;
     class K todo;
+    class Q new;
 ```
 
 Vetva `CONFIRMED` je prísnejšia než vetva `DRAFT` — to je BR-03 a jeho
 zdôvodnenie (potvrdená rezervácia blokuje prístroj ostatným, návrh nie).
+
+Vetva `PENDING_APPROVAL` *(v0.2)* nemá lehotu, ale má kontrolu expirácie: keď
+žiadosti už začal termín, zrušiť sa nedá a systém namiesto toho zapíše
+`EXPIRED` (nález N-04). Je to jediné miesto v OP-04, kde operácia zmení stav
+**a napriek tomu skončí zamietnutím**.
+
+### 3.5 OP-05 — Approve Reservation *(v0.2)*
+
+```mermaid
+flowchart TD
+    A([Štart]) --> B["Prijmi reservation_id, identitu, rozhodnutie<br/>(schváliť / zamietnuť)"]
+    B --> C{"Rezervácia existuje?"}
+    C -->|"nie"| X1["Zamietni: NOT_FOUND"]
+    C -->|"áno"| D{"state = PENDING_APPROVAL?"}
+    D -->|"nie"| X2["Zamietni: INVALID_STATE<br/>stav sa nemení"]
+    D -->|"áno"| E{"Rozhoduje SUPERVISOR,<br/>ktorý NIE je vlastník?<br/>BR-07"}
+    E -->|"nie"| X3["Zamietni: FORBIDDEN"]
+    E -->|"áno"| F{"now < starts_at?<br/>BR-08"}
+    F -->|"nie"| X4["state = EXPIRED<br/>a zamietni - REQ-15"]
+    F -->|"áno"| G{"Rozhodnutie?"}
+    G -->|"zamietnuť"| R2["state = REJECTED<br/>prístroj sa uvoľní - REQ-12"]
+    G -->|"schváliť"| H{"Prístroj aktívny?<br/>BR-05"}
+    H -->|"nie"| X5["Zamietni: INSTRUMENT_INACTIVE<br/>zostáva PENDING_APPROVAL"]
+    H -->|"áno"| I{"Certifikát VLASTNÍKA<br/>stále platný?<br/>BR-04"}
+    I -->|"nie"| X6["Zamietni: MISSING_CERTIFICATION<br/>zostáva PENDING_APPROVAL"]
+    I -->|"áno"| J{"Prekryv s inou rezerváciou<br/>v blokujúcom stave?<br/>BR-02"}
+    J -->|"áno"| X7["Zamietni: OVERLAP<br/>zostáva PENDING_APPROVAL"]
+    J -->|"nie"| R1["state = CONFIRMED - REQ-11"]
+    R1 --> K["Oznámenie žiadateľovi<br/>TBD-03 - neimplementované"]
+    R2 --> K
+    K --> L["Vráť aktuálny stav rezervácie"]
+    L --> Z([Koniec])
+    X1 --> Z
+    X2 --> Z
+    X3 --> Z
+    X4 --> Z
+    X5 --> Z
+    X6 --> Z
+    X7 --> Z
+
+    N["Kontroly BR-04, BR-05 a BR-02 sa opakujú,<br/>hoci prebehli už pri podaní žiadosti (OP-03).<br/>Medzitým ubehol čas: certifikát mohol vypršať,<br/>prístroj ísť do servisu, termín obsadiť niekto iný."]
+    I -.- N
+    J -.- N
+
+    classDef rej fill:#ffecec,stroke:#c0392b,color:#300;
+    classDef ok fill:#eaf7ea,stroke:#27ae60,color:#032;
+    classDef note fill:#fffbe6,stroke:#c9a227,color:#332;
+    classDef todo fill:#f0f0f0,stroke:#888,color:#333,stroke-dasharray: 4 3;
+    class X1,X2,X3,X4,X5,X6,X7 rej;
+    class R1,R2 ok;
+    class N note;
+    class K todo;
+```
+
+Tri veci, ktoré diagram hovorí a stojí za to si ich všimnúť:
+
+1. **Zamietnutie obchádza kontroly** (REQ-12). Vedúci musí vedieť zamietnuť aj
+   žiadosť na prístroj, ktorý je medzitým v servise — inak by taká žiadosť
+   visela až do vypršania.
+2. **Certifikát sa overuje vlastníkovi rezervácie**, nie schvaľovateľovi.
+   Vedúci rozhoduje, ale prístroj bude obsluhovať žiadateľ.
+3. **Neúspešné schválenie nechá žiadosť žiť.** Prekážka môže zmiznúť
+   a rozhodnutie sa dá zopakovať; jediný spôsob, ako žiadosť ukončiť, je
+   explicitné zamietnutie, zrušenie žiadateľom alebo vypršanie.

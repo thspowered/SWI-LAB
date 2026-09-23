@@ -16,6 +16,8 @@ class ErrorCode(StrEnum):
     MISSING_CERTIFICATION = "MISSING_CERTIFICATION"
     OVERLAP = "OVERLAP"
     TOO_LATE = "TOO_LATE"
+    #: v0.2 - ziadosti o schvalenie nastal starts_at (BR-08).
+    EXPIRED = "EXPIRED"
 
 
 class DomainError(Exception):
