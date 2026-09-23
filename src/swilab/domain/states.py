@@ -27,3 +27,4 @@ class InstrumentCategory(StrEnum):
 class UserRole(StrEnum):
     STUDENT = "STUDENT"
     SUPERVISOR = "SUPERVISOR"
+
