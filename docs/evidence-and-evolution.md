@@ -100,8 +100,8 @@ porovnáva okamih, nie zápis: `09:30+02:00 == 07:30+00:00` je `True`.
 
 # Evidence C02: špecifikácia → bežiaca aplikácia
 
-**Stav:** časť A (baseline v0.1). Časť B (zmena — schvaľovací proces) sa dopĺňa
-po jej dokončení.
+**Stav:** časť A (baseline v0.1) aj časť B (zmena — schvaľovací proces, v0.2).
+Zhrnutie zmeny je na konci dokumentu.
 
 ## Prijatá baseline
 
@@ -214,3 +214,97 @@ TBD-01 až TBD-06 v časti 7 špecifikácie. Najpodstatnejšie pre ďalšie cvi�
 
 Vetva `feature/c02-app` (nad `feature/c02-baseline`). Tag sa nastaví po
 zlúčení oboch častí C02.
+
+
+---
+
+## Zhrnutie dopadu zmeny (časť B — schvaľovací proces)
+
+**Analýza dopadu vznikla pred prepisom** špecifikácie a je v
+[docs/change-impact-c02.md](change-impact-c02.md) — samostatný commit `ada6d6e`,
+aby bolo v histórii vidieť poradie.
+
+### Rozhodnutia tímu k zmene
+
+| # | Rozhodnutie | Prečo |
+| - | ----------- | ----- |
+| R-1 | Schvaľovanie zapína príznak `Instrument.requires_approval` | zmenová karta hovorí „niektoré Resources“ |
+| R-2 | `PENDING_APPROVAL` **blokuje** prístroj | vedúci nikdy nedostane dve žiadosti na ten istý čas |
+| R-3 | Žiadosť vyprší pri `starts_at` | hranica odvodená z dát — žiadne vymyslené číslo |
+| R-4 | Zamietnutie končí v `REJECTED` | rozhodnutie človeka má zostať v histórii |
+| R-5 | `PENDING_APPROVAL` sa ruší bez lehoty | žiadosť ešte nie je prísľub, BR-03 nemá čo chrániť |
+
+### Čo zmena zasiahla
+
+- **Pravidlá:** BR-02 (blokujúce stavy), BR-03 (dva nové riadky), BR-05;
+  nové BR-07 (kto smie schvaľovať) a BR-08 (expirácia).
+- **Požiadavky:** zmenené REQ-03, REQ-04, REQ-05; nové REQ-10 až REQ-15.
+- **Operácie:** OP-02, OP-03, OP-04 upravené; **nová OP-05**.
+- **Diagramy:** use case (nový cieľ, nie nový aktér), stavový diagram (3 nové
+  stavy, 4 nové prechody), aktivity OP-02/03/04 + nová aktivita OP-05.
+- **Kód:** `ReservationState` (+3 hodnoty), `Instrument.requires_approval`,
+  `rules.approval_request_is_alive`, `services.decide_reservation`, dva nové
+  endpointy, `check_availability` dostáva čas.
+
+### Čo sa výslovne nezmenilo
+
+OP-01 Create (REQ-01, REQ-02), BR-01 (význam intervalu), BR-04 (certifikácia —
+mení sa iba to, koľkokrát sa vyhodnocuje), BR-06 (oprávnenie vlastník/supervisor),
+REQ-09 (idempotencia zrušenia zostala presne v rozsahu `CANCELLED`), lehota
+60 minút pre `CONFIRMED` a riešenia nálezov N-01 až N-03.
+
+### Nálezy pri kontrole konzistencie v0.2
+
+**N-04 — Zrušenie vypršanej žiadosti si odporovalo s expiráciou.** BR-03
+dovoľovalo zrušiť `PENDING_APPROVAL` kedykoľvek, BR-08 hovorí, že po `starts_at`
+je žiadosť vypršaná a `EXPIRED` sa zrušiť nedá. Pre žiadosť po termíne dávali
+obe pravidlá opačnú odpoveď a implementácia by si vybrala podľa poradia
+podmienok v kóde.
+*Vyriešené v špecifikácii:* expirácia má prednosť, pretože BR-08 je vlastnosť
+žiadosti, nie správanie jednej operácie. OP-04 stav zapíše a zrušenie zamietne.
+Overené: `tests/test_approval.py::test_cancel_expired_request_expires_it`.
+
+**N-05 — Nebolo povedané, či vypršať môže aj `DRAFT`.** Doplnené do BR-08:
+expirácia sa týka iba `PENDING_APPROVAL`, lebo iba ten blokuje prístroj.
+
+### Skutočne vykonané príklady overenia (v0.2)
+
+`pytest -v` → **70 passed, 1 xfailed**. Nové príklady pre zmenu:
+
+| Jav zo zmenovej karty | Ako je overený |
+| --------------------- | -------------- |
+| schválenie | `PENDING_APPROVAL → CONFIRMED`, dôvod v OP-02 sa mení z `PENDING_APPROVAL` na `CONFIRMED` |
+| **oneskorenie** | žiadosť zostáva `PENDING_APPROVAL` a celý čas blokuje prístroj; kontroly sa pri rozhodnutí opakujú (certifikát, prístroj, prekryv) |
+| **zamietnutie** | `→ REJECTED`, prístroj je znova `AVAILABLE`; ďalšie zrušenie skončí `INVALID_STATE` |
+| **vypršanie** | rozhodnutie v okamihu `starts_at` → `EXPIRED` (stav sa zapíše); o sekundu skôr prejde |
+| oprávnenie | študent nesmie rozhodovať; vedúci nesmie rozhodnúť o vlastnej žiadosti; iný vedúci smie |
+
+Demo proti bežiacej aplikácii (`scripts/demo.py`) predvádza celý tok vrátane
+`PENDING_APPROVAL → CONFIRMED`, zamietnutia aj vypršania.
+
+### Architektonické drivery, ktoré zmena odkryla
+
+1. **Perzistentný asynchrónny proces.** Rezervácia žije v stave, ktorý nikto
+   neuzavrie automaticky. `EXPIRED` sa dnes zapíše až pri operácii, ktorá
+   záznam číta — dávka či plánovač je rozhodnutie C03 (TBD-08).
+2. **Čas ako vstup pravidla.** Expirácia zaviedla čas do vyhodnotenia
+   dostupnosti: ten istý dopyt vráti ráno iný výsledok než po `starts_at`.
+   Zdroj času prestal byť detail.
+3. **REQ-05 sa rozšírilo na dve miesta.** Okno medzi kontrolou a zápisom je
+   teraz v `confirm` aj v `approve`, a do blokujúcej množiny pribudol druhý stav.
+4. **Notifikácie prestali byť ozdoba.** Pri okamžitom potvrdení sa používateľ
+   výsledok dozvedel z odpovede; pri schvaľovaní sa ho inak nedozvie vôbec.
+5. **Migrácie.** Zmena pridala hodnoty do enum typu a stĺpec do tabuľky.
+   `create_all` existujúcu schému nezmení, takže testy aj demo si schému
+   prestavujú. Pred ďalšou zmenou dát to treba vyriešiť.
+
+### Zostávajúci predpoklad / neznáma po zmene
+
+TBD-07: ak je v laboratóriu jediný vedúci, jeho vlastné žiadosti nemá kto
+schváliť a prepadnú. Je to dôsledok BR-07, ktorý riešime personálne (druhý
+schvaľovateľ), nie zmenou pravidla.
+
+### Commit / tag aplikácie
+
+Vetvy `feature/c02-baseline` → `feature/c02-app` → `feature/c02-approval`
+(PR #3, #4, #5). Tag sa nastaví po zlúčení do `main`.

@@ -16,6 +16,12 @@ def engine():
     """Realny Postgres. Ziadne SQLite, ziadny in-memory fake -
     spike ma overit skutocnu databazu."""
     eng = create_engine(DATABASE_URL, future=True)
+    # drop_all + create_all, nie iba create_all: v0.2 pridala hodnoty do
+    # enum typu reservation_state a stlpec instruments.requires_approval.
+    # create_all existujucu tabulku ani typ nezmeni - bez migracii je cista
+    # schema jediny sposob, ako mat testy deterministicke. Migracie su
+    # architektonicky driver pre C03.
+    Base.metadata.drop_all(eng)
     Base.metadata.create_all(eng)
     yield eng
     eng.dispose()
@@ -67,9 +73,18 @@ def make_instrument(session):
     from swilab.domain.states import InstrumentCategory
     from swilab.models import Instrument
 
-    def _make(category=InstrumentCategory.MICROSCOPE, is_active=True, name="Zeiss Axio"):
+    def _make(
+        category=InstrumentCategory.MICROSCOPE,
+        is_active=True,
+        name="Zeiss Axio",
+        requires_approval=False,
+    ):
         instrument = Instrument(
-            name=name, category=category, location="Lab B2.14", is_active=is_active
+            name=name,
+            category=category,
+            location="Lab B2.14",
+            is_active=is_active,
+            requires_approval=requires_approval,
         )
         session.add(instrument)
         session.commit()

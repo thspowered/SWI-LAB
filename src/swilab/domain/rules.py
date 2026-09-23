@@ -41,6 +41,19 @@ def certification_covers(valid_until: datetime, starts_at: datetime) -> bool:
     return valid_until > starts_at
 
 
+def approval_request_is_alive(starts_at: datetime, now: datetime) -> bool:
+    """BR-08: ziadost o schvalenie plati, kym nenastane starts_at.
+
+    Hranica je ostra: v okamihu starts_at uz ziadost neplati. Lehota je
+    odvodena z dat, ktore uz mame - specifikacia tym nezavadza ziadne
+    vymyslene cislo.
+
+    Tyka sa IBA stavu PENDING_APPROVAL. DRAFT nevyprsi, lebo nikoho
+    neblokuje (nalez N-05).
+    """
+    return now < starts_at
+
+
 def may_cancel_confirmed(starts_at: datetime, now: datetime) -> bool:
     """BR-03: potvrdenu rezervaciu mozno zrusit, len ak do zaciatku zostava
     striktne viac ako CANCELLATION_LEAD_TIME.

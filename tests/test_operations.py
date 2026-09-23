@@ -161,6 +161,7 @@ def test_availability_interval_boundaries(
     make_instrument,
     make_user,
     make_reservation,
+    now,
     tomorrow,
     offset_start,
     offset_end,
@@ -179,6 +180,7 @@ def test_availability_interval_boundaries(
         instrument_id=instrument.id,
         starts_at=starts_at + offset_start,
         ends_at=starts_at + offset_end,
+        now=now,
     )
 
     assert result.available is expected_available, case
@@ -188,7 +190,7 @@ def test_availability_interval_boundaries(
     "blocking_state", [ReservationState.DRAFT, ReservationState.CANCELLED]
 )
 def test_only_confirmed_blocks(
-    session, make_instrument, make_user, make_reservation, tomorrow, blocking_state
+    session, make_instrument, make_user, make_reservation, now, tomorrow, blocking_state
 ):
     """BR-02: DRAFT ani CANCELLED pristroj nealokuju."""
     instrument, user = make_instrument(), make_user()
@@ -196,14 +198,18 @@ def test_only_confirmed_blocks(
     make_reservation(instrument, user, starts_at, ends_at, state=blocking_state)
 
     result = service.check_availability(
-        session, instrument_id=instrument.id, starts_at=starts_at, ends_at=ends_at
+        session,
+        instrument_id=instrument.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        now=now,
     )
 
     assert result.available is True
 
 
 def test_availability_reports_conflicting_reservation(
-    session, make_instrument, make_user, make_reservation, tomorrow
+    session, make_instrument, make_user, make_reservation, now, tomorrow
 ):
     """OP-02: zoznam kolidujucich rezervacii je sucast vysledku."""
     instrument, user = make_instrument(), make_user()
@@ -213,20 +219,28 @@ def test_availability_reports_conflicting_reservation(
     )
 
     result = service.check_availability(
-        session, instrument_id=instrument.id, starts_at=starts_at, ends_at=ends_at
+        session,
+        instrument_id=instrument.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        now=now,
     )
 
     assert result.available is False
     assert result.conflicting_reservation_ids == [blocking.id]
 
 
-def test_inactive_instrument_is_unavailable(session, make_instrument, tomorrow):
+def test_inactive_instrument_is_unavailable(session, make_instrument, now, tomorrow):
     """BR-05: neaktivny pristroj je nedostupny - ale je to ODPOVED, nie chyba."""
     instrument = make_instrument(is_active=False)
     starts_at, ends_at = tomorrow
 
     result = service.check_availability(
-        session, instrument_id=instrument.id, starts_at=starts_at, ends_at=ends_at
+        session,
+        instrument_id=instrument.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        now=now,
     )
 
     assert result.available is False
@@ -245,7 +259,11 @@ def test_availability_allows_past_interval(
     )
 
     result = service.check_availability(
-        session, instrument_id=instrument.id, starts_at=past_start, ends_at=past_end
+        session,
+        instrument_id=instrument.id,
+        starts_at=past_start,
+        ends_at=past_end,
+        now=now,
     )
 
     assert result.available is False
@@ -278,7 +296,11 @@ def test_confirm_allocates_instrument(
     assert confirmed.state is ReservationState.CONFIRMED
 
     availability = service.check_availability(
-        session, instrument_id=instrument.id, starts_at=starts_at, ends_at=ends_at
+        session,
+        instrument_id=instrument.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        now=now,
     )
     assert availability.available is False
 
@@ -509,7 +531,11 @@ def test_cancel_confirmed_frees_instrument(
     )
 
     availability = service.check_availability(
-        session, instrument_id=instrument.id, starts_at=starts_at, ends_at=ends_at
+        session,
+        instrument_id=instrument.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        now=now,
     )
     assert availability.available is True
 
