@@ -1032,9 +1032,10 @@ náleze N-03.
 ### Kontrola po nezávislej revízii v0.2
 
 Baseline v0.2 sme po dopísaní dali skontrolovať ešte raz, nezávisle od toho,
-kto ju písal. Revízia našla **šesť skutočných rozporov** (`RV-1` až `RV-6`) — všetky vznikli tým,
-že oprava nálezu N-04 sa premietla len do časti dokumentu. Uvádzame ich, lebo
-sú to presne tie chyby, ktoré by inak prežili do C03:
+kto ju písal. Revízia našla **šesť skutočných rozporov** (`RV-1` až `RV-6`)
+— všetky vznikli tým, že oprava nálezu N-04 sa premietla len do časti
+dokumentu. Uvádzame ich, lebo sú to presne tie chyby, ktoré by inak
+prežili do C03:
 
 | # | Čo bolo zle | Ako je to vyriešené |
 | - | ----------- | ------------------- |
@@ -1151,4 +1152,5 @@ v [docs/change-impact-c02.md](change-impact-c02.md) (tabuľka R-1 až R-5).
 tímu* (R-1 až R-5). `RV-x` v časti 9 tejto špecifikácie sú *rozpory nájdené
 nezávislou revíziou* (RV-1 až RV-6). Pôvodne mali obe sady štítok `R-x`,
 čo bol presne ten druh nejednoznačnosti, ktorý revízia hľadá inde.
+
 Ďalšie zmeny sa povedú ako v0.3, opäť s analýzou dopadu pred prepisom.
