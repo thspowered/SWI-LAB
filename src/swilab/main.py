@@ -26,6 +26,8 @@ STATUS_BY_CODE = {
     ErrorCode.MISSING_CERTIFICATION: 409,
     ErrorCode.OVERLAP: 409,
     ErrorCode.TOO_LATE: 409,
+    ErrorCode.EXPIRED: 409,
+    ErrorCode.ALREADY_STARTED: 409,
 }
 
 
@@ -38,7 +40,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="SWI-LAB", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="SWI-LAB", version="0.2.0", lifespan=lifespan)
 
 
 @app.exception_handler(DomainError)

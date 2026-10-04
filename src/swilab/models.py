@@ -28,6 +28,11 @@ class Instrument(Base):
     )
     location: Mapped[str] = mapped_column(String(200), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # v0.2: schvalovanie sa zapina na konkretnom pristroji, nie na kategorii
+    # (rozhodnutie R-1 v docs/change-impact-c02.md).
+    requires_approval: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
 
     reservations: Mapped[list["Reservation"]] = relationship(back_populates="instrument")
 

@@ -1,4 +1,4 @@
-"""Domenove pravidla BR-01 az BR-04 zo specifikacie baseline v0.1.
+"""Domenove pravidla zo specifikacie baseline v0.2 (BR-01, BR-03, BR-04, BR-08).
 
 Funkcie su ciste: nepoznaju HTTP ani databazu, pracuju iba s hodnotami.
 Kazda nesie v docstringu pravidlo, ktore vynucuje, aby sa dalo prejst od
@@ -39,6 +39,19 @@ def certification_covers(valid_until: datetime, starts_at: datetime) -> bool:
     logika ako pri intervale rezervacie, zamerne.
     """
     return valid_until > starts_at
+
+
+def approval_request_is_alive(starts_at: datetime, now: datetime) -> bool:
+    """BR-08: ziadost o schvalenie plati, kym nenastane starts_at.
+
+    Hranica je ostra: v okamihu starts_at uz ziadost neplati. Lehota je
+    odvodena z dat, ktore uz mame - specifikacia tym nezavadza ziadne
+    vymyslene cislo.
+
+    Tyka sa IBA stavu PENDING_APPROVAL. DRAFT nevyprsi, lebo nikoho
+    neblokuje (nalez N-05).
+    """
+    return now < starts_at
 
 
 def may_cancel_confirmed(starts_at: datetime, now: datetime) -> bool:

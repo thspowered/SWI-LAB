@@ -64,7 +64,7 @@ Na macOS stačí, aby mal `.pth` súbor v `site-packages` flag `hidden` —
 CPython skryté `.pth` zámerne preskakuje a editable install prestane fungovať
 bez akejkoľvek chybovej hlášky (`chflags nohidden` to opraví).
 
-## Operácie (baseline v0.1)
+## Operácie (baseline v0.2)
 
 | Operácia | Endpoint |
 | -------- | -------- |
@@ -72,9 +72,21 @@ bez akejkoľvek chybovej hlášky (`chflags nohidden` to opraví).
 | OP-02 Check Availability | `GET /instruments/{id}/availability?starts_at=&ends_at=` |
 | OP-03 Confirm Reservation | `POST /reservations/{id}/confirm` |
 | OP-04 Cancel Reservation | `POST /reservations/{id}/cancel` |
+| OP-05 Approve Reservation | `POST /reservations/{id}/approve` · `POST /reservations/{id}/reject` |
 
-Správa prístrojov, používateľov a certifikátov **nie je** súčasťou v0.1
+Prístroje s príznakom `requires_approval` idú cez schvaľovanie: potvrdenie
+vytvorí žiadosť (`PENDING_APPROVAL`), ktorá prístroj blokuje, kým o nej vedúci
+nerozhodne alebo kým nenastane jej začiatok (`EXPIRED`).
+
+Stavy rezervácie: `DRAFT` · `PENDING_APPROVAL` · `CONFIRMED` · `CANCELLED` ·
+`REJECTED` · `EXPIRED`.
+
+Správa prístrojov, používateľov a certifikátov **nie je** súčasťou v0.2
 (TBD-02) — tieto dáta sa zakladajú priamo v databáze.
+
+Schéma sa zatiaľ vytvára cez `create_all`, bez migrácií (architektonický driver
+pre C03). Po prechode z v0.1 na v0.2 preto databázu prestav:
+`docker compose down && docker compose up -d --wait db`.
 
 Celé chovanie sa dá predviesť jedným príkazom proti bežiacej aplikácii;
 pre každú operáciu jeden úspešný a jeden negatívny / hraničný príklad:
@@ -101,7 +113,7 @@ POST /reservations
 ```
 
 V C01 bola táto cesta iba **definovaná**. V C02 je **implementovaná a overená**
-(`tests/test_api.py::test_http_create_reservation`) — vrátane zvyšných troch
+(`tests/test_api.py::test_http_create_reservation`) — vrátane zvyšných štyroch
 operácií. Architektúru tejto cesty rieši až C03.
 
 ## C01 Definition of Done
@@ -124,8 +136,9 @@ operácií. Architektúru tejto cesty rieši až C03.
 
 ## Dokumentácia
 
-- [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.1
+- [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
 - [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
+- [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia
 - [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 engineering spike

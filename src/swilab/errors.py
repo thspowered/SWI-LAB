@@ -16,6 +16,12 @@ class ErrorCode(StrEnum):
     MISSING_CERTIFICATION = "MISSING_CERTIFICATION"
     OVERLAP = "OVERLAP"
     TOO_LATE = "TOO_LATE"
+    #: v0.2 - ziadosti o schvalenie nastal starts_at (BR-08).
+    EXPIRED = "EXPIRED"
+    #: Rezervacia uz zacala, takze ju uz nemozno potvrdit (REQ-06).
+    #: Odlisne od START_IN_PAST: ten hovori o CHYBNOM VSTUPE pri vytvarani,
+    #: toto o ulozenom stave a case, takze ma iny HTTP status.
+    ALREADY_STARTED = "ALREADY_STARTED"
 
 
 class DomainError(Exception):
