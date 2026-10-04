@@ -371,7 +371,8 @@ stavov a BR-02 nemali podmienku živosti; REQ-05 nepokrývala schvaľovanie; BR-
 sľubovalo zápis `EXPIRED` aj tam, kde sa nedeje; zdôvodnenie opakovanej
 kontroly certifikátu tvrdilo niečo, čo sa plynutím času stať nemôže; OP-05
 kontrolovala stav pred oprávnením a tým prezrádzala stav cudzej rezervácie.
-Podrobne v časti 9 špecifikácie, tabuľka R-1 až R-6.
+Podrobne v časti 9 špecifikácie, tabuľka RV-1 až RV-6. (Nezamieňať s R-1 až
+R-5 v analýze dopadu — to sú rozhodnutia tímu, nie nálezy revízie.)
 
 ### Čo sa doplnilo v testoch
 

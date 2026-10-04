@@ -1032,18 +1032,18 @@ náleze N-03.
 ### Kontrola po nezávislej revízii v0.2
 
 Baseline v0.2 sme po dopísaní dali skontrolovať ešte raz, nezávisle od toho,
-kto ju písal. Revízia našla **šesť skutočných rozporov** — všetky vznikli tým,
+kto ju písal. Revízia našla **šesť skutočných rozporov** (`RV-1` až `RV-6`) — všetky vznikli tým,
 že oprava nálezu N-04 sa premietla len do časti dokumentu. Uvádzame ich, lebo
 sú to presne tie chyby, ktoré by inak prežili do C03:
 
 | # | Čo bolo zle | Ako je to vyriešené |
 | - | ----------- | ------------------- |
-| R-1 | BR-03 a REQ-14 stále tvrdili, že `PENDING_APPROVAL` sa ruší „vždy, bez časovej podmienky“, kým chybový zoznam OP-04 hovoril opak (nález N-04). Kto implementuje podľa pravidiel — čo je správny postup — dostane opačné správanie. | BR-03, REQ-14 aj predpoklady OP-04 prepísané. |
-| R-2 | Definícia blokujúcich stavov a BR-02 neobsahovali podmienku živosti, hoci REQ-03 áno. Podľa doslovného znenia BR-02 bolo možné invariant porušiť vypršanou žiadosťou. | Živosť je odteraz súčasťou definície aj invariantu; dôsledok (v databáze môže ležať vypršaná žiadosť prekrývajúca sa s potvrdenou rezerváciou) je pomenovaný. |
-| R-3 | REQ-05 hovorila len o potvrdení a o návrate do `DRAFT`, hoci OP-05 sa na ňu odvolávala pri súbežných schváleniach. | REQ-05 rozšírená na potvrdenie aj schválenie. |
-| R-4 | BR-08 sľubovalo, že `EXPIRED` sa zapíše „pri najbližšej operácii, ktorá záznam číta“ — OP-02 ho však výslovne nezapisuje a OP-03 o tom mlčal. | BR-08 rozlišuje **vyhodnotenie** (každá operácia) od **zápisu** (iba OP-04 a OP-05). |
-| R-5 | Zdôvodnenie opakovanej kontroly pri schválení tvrdilo, že „certifikát mohol medzitým vypršať“. BR-04 porovnáva dva uložené údaje, takže plynutím času sa jeho výsledok zmeniť nemôže. | Zdôvodnenie opravené: chráni pred **zmenou záznamu** certifikátu, nie pred plynutím času. Kontrola zostáva. |
-| R-6 | OP-05 kontrolovala stav pred oprávnením, kým OP-03 a OP-04 naopak. Neoprávnený používateľ sa z kódu chyby dozvedel stav cudzej rezervácie. | Poradie zjednotené: oprávnenie najprv. |
+| RV-1 | BR-03 a REQ-14 stále tvrdili, že `PENDING_APPROVAL` sa ruší „vždy, bez časovej podmienky“, kým chybový zoznam OP-04 hovoril opak (nález N-04). Kto implementuje podľa pravidiel — čo je správny postup — dostane opačné správanie. | BR-03, REQ-14 aj predpoklady OP-04 prepísané. |
+| RV-2 | Definícia blokujúcich stavov a BR-02 neobsahovali podmienku živosti, hoci REQ-03 áno. Podľa doslovného znenia BR-02 bolo možné invariant porušiť vypršanou žiadosťou. | Živosť je odteraz súčasťou definície aj invariantu; dôsledok (v databáze môže ležať vypršaná žiadosť prekrývajúca sa s potvrdenou rezerváciou) je pomenovaný. |
+| RV-3 | REQ-05 hovorila len o potvrdení a o návrate do `DRAFT`, hoci OP-05 sa na ňu odvolávala pri súbežných schváleniach. | REQ-05 rozšírená na potvrdenie aj schválenie. |
+| RV-4 | BR-08 sľubovalo, že `EXPIRED` sa zapíše „pri najbližšej operácii, ktorá záznam číta“ — OP-02 ho však výslovne nezapisuje a OP-03 o tom mlčal. | BR-08 rozlišuje **vyhodnotenie** (každá operácia) od **zápisu** (iba OP-04 a OP-05). |
+| RV-5 | Zdôvodnenie opakovanej kontroly pri schválení tvrdilo, že „certifikát mohol medzitým vypršať“. BR-04 porovnáva dva uložené údaje, takže plynutím času sa jeho výsledok zmeniť nemôže. | Zdôvodnenie opravené: chráni pred **zmenou záznamu** certifikátu, nie pred plynutím času. Kontrola zostáva. |
+| RV-6 | OP-05 kontrolovala stav pred oprávnením, kým OP-03 a OP-04 naopak. Neoprávnený používateľ sa z kódu chyby dozvedel stav cudzej rezervácie. | Poradie zjednotené: oprávnenie najprv. |
 
 Okrem toho revízia odkryla dve veci o správaní systému:
 
@@ -1135,15 +1135,20 @@ dokument prečítali.
 | Člen          | Rola pri baseline v0.1                                  | Stav                         |
 | ------------- | -------------------------------------------------------- | ---------------------------- |
 | Tomáš Hrubý   | návrh špecifikácie, diagramov a kontroly konzistencie     | ✅ 2026-09-21                 |
-| Tomáš Krišica | review pred integráciou (PR `feature/c02-baseline`)       | ⏳ prebieha                   |
+| Tomáš Krišica | review pred integráciou ([PR #3](https://github.com/thspowered/SWI-LAB/pull/3)) | ✅ 2026-10-04 |
 
 **Baseline v0.2 — schvaľovací proces**
 
 | Člen          | Rola pri baseline v0.2                                                  | Stav          |
 | ------------- | ------------------------------------------------------------------------ | ------------- |
 | Tomáš Hrubý   | analýza dopadu, úprava špecifikácie a diagramov, implementácia zmeny      | ✅ 2026-09-23  |
-| Tomáš Krišica | review pred integráciou (PR `feature/c02-approval`)                       | ⏳ prebieha    |
+| Tomáš Krišica | review pred integráciou ([PR #5](https://github.com/thspowered/SWI-LAB/pull/5)) | ✅ 2026-10-04 |
 
 Rozhodnutia, ktoré musí tím vedieť obhájiť pri v0.2, sú vymenované
 v [docs/change-impact-c02.md](change-impact-c02.md) (tabuľka R-1 až R-5).
+
+**Pozor na dve rôzne číslovania.** `R-x` v analýze dopadu sú *rozhodnutia
+tímu* (R-1 až R-5). `RV-x` v časti 9 tejto špecifikácie sú *rozpory nájdené
+nezávislou revíziou* (RV-1 až RV-6). Pôvodne mali obe sady štítok `R-x`,
+čo bol presne ten druh nejednoznačnosti, ktorý revízia hľadá inde.
 Ďalšie zmeny sa povedú ako v0.3, opäť s analýzou dopadu pred prepisom.

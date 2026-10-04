@@ -18,7 +18,8 @@ prístroj obsluhuje iba certifikovaný človek.
 ## Doména
 
 - **Instrument** — rezervovaný prístroj (mikroskop, spektrometer, 3D tlačiareň, centrifúga).
-- **Reservation** — rezervácia na interval `[starts_at, ends_at)`, v stave `DRAFT`, `CONFIRMED` alebo `CANCELLED`.
+- **Reservation** — rezervácia na interval `[starts_at, ends_at)`, v jednom zo šiestich
+  stavov: `DRAFT`, `PENDING_APPROVAL`, `CONFIRMED`, `CANCELLED`, `REJECTED`, `EXPIRED`.
 - **User** — študent alebo vedúci laboratória.
 - **Certification** — oprávnenie používateľa na kategóriu prístroja, platné do dátumu.
 
@@ -26,10 +27,14 @@ prístroj obsluhuje iba certifikovaný človek.
 
 **Pravidlá:**
 
-1. Dve `CONFIRMED` rezervácie toho istého prístroja sa nesmú prekrývať.
+1. Dve **blokujúce** rezervácie toho istého prístroja sa nesmú prekrývať —
+   od v0.2 blokuje `CONFIRMED` aj živá žiadosť `PENDING_APPROVAL` (BR-02).
 2. Rezerváciu možno potvrdiť len s platným certifikátom na kategóriu prístroja.
 
 **Externá hranica:** Notification Service.
+
+Záväzné znenie je v [docs/specification.md](docs/specification.md) — baseline v0.2.
+Táto sekcia je len prehľad.
 
 Podrobne v [docs/intent-and-change.md](docs/intent-and-change.md).
 
@@ -134,6 +139,28 @@ operácií. Architektúru tejto cesty rieši až C03.
 - [x] evidence + decision zo spiku
 - [x] definovaný CP1 walking skeleton
 
+## C02 Definition of Done
+
+- [x] všetky štyri základné operácie majú úplnú textovú časť špecifikácie
+- [x] každý prijatý požiadavok prešiel kontrolou prijatia (REQ-01..REQ-16)
+- [x] spoločné doménové pravidlá a invarianty sú definované iba raz (BR-01..BR-08)
+- [x] existuje diagram prípadov užitia
+- [x] existuje stavový diagram celého životného cyklu Reservation
+- [x] text, požiadavky a oba pohľady sú vzájomne konzistentné
+- [x] baseline v0.1 explicitne schválená tímom — [PR #3](https://github.com/thspowered/SWI-LAB/pull/3)
+- [x] aplikácia demonštruje všetky štyri základné operácie — [PR #4](https://github.com/thspowered/SWI-LAB/pull/4)
+- [x] pre každú operáciu spustený úspešný aj negatívny / hraničný príklad
+- [x] dopad zmeny analyzovaný pred úpravou špecifikácie — commit `ada6d6e` pred `e6df8cf`
+- [x] dotknuté i nedotknuté časti explicitne identifikované
+- [x] nová operácia Approve je úplne špecifikovaná (OP-05)
+- [x] diagram prípadov užitia a stavový diagram aktualizované na v0.2
+- [x] bežiaca aplikácia zodpovedá schválenej baseline v0.2 — [PR #5](https://github.com/thspowered/SWI-LAB/pull/5)
+- [x] evidence prepája špecifikáciu s bežiacim chovaním
+- [x] aspoň jeden konkrétny architektonický driver pripravený pre C03
+
+Tri doložené medzery (REQ-05 pri potvrdení, REQ-05 pri schvaľovaní, REQ-16)
+sú zámerne nesplnené a sú vstupom pre C03.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
@@ -141,4 +168,4 @@ operácií. Architektúru tejto cesty rieši až C03.
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 engineering spike
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02
