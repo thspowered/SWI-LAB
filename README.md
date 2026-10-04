@@ -55,8 +55,33 @@ pytest -v
 uvicorn swilab.main:app --reload
 ```
 
-Aplikácia beží na `http://127.0.0.1:8000`, kontrola stavu na `/health`.
+Aplikácia beží na `http://127.0.0.1:8000`, kontrola stavu na `/health`,
+interaktívna dokumentácia API na `/docs`.
 Databáza počúva na porte **5433**, aby nekolidovala s lokálnym Postgresom.
+
+Ak `import swilab` zlyhá aj po `pip install -e`, spusti s `PYTHONPATH=src`.
+Na macOS stačí, aby mal `.pth` súbor v `site-packages` flag `hidden` —
+CPython skryté `.pth` zámerne preskakuje a editable install prestane fungovať
+bez akejkoľvek chybovej hlášky (`chflags nohidden` to opraví).
+
+## Operácie (baseline v0.1)
+
+| Operácia | Endpoint |
+| -------- | -------- |
+| OP-01 Create Reservation | `POST /reservations` |
+| OP-02 Check Availability | `GET /instruments/{id}/availability?starts_at=&ends_at=` |
+| OP-03 Confirm Reservation | `POST /reservations/{id}/confirm` |
+| OP-04 Cancel Reservation | `POST /reservations/{id}/cancel` |
+
+Správa prístrojov, používateľov a certifikátov **nie je** súčasťou v0.1
+(TBD-02) — tieto dáta sa zakladajú priamo v databáze.
+
+Celé chovanie sa dá predviesť jedným príkazom proti bežiacej aplikácii;
+pre každú operáciu jeden úspešný a jeden negatívny / hraničný príklad:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/demo.py
+```
 
 Zastavenie databázy: `docker compose down` (dáta sa nezachovávajú, kontajner
 nemá volume — v tejto fáze projektu je to zámer).
@@ -75,7 +100,9 @@ POST /reservations
        a prítomnosť riadku v databáze
 ```
 
-V C01 je táto cesta iba **definovaná**, nie implementovaná.
+V C01 bola táto cesta iba **definovaná**. V C02 je **implementovaná a overená**
+(`tests/test_api.py::test_http_create_reservation`) — vrátane zvyšných troch
+operácií. Architektúru tejto cesty rieši až C03.
 
 ## C01 Definition of Done
 
