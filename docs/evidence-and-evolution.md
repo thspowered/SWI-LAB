@@ -397,3 +397,191 @@ dve `CONFIRMED`, so schvaľovaním → dve `PENDING_APPROVAL`) a REQ-16
 *Opravené v C03 časti A:* táto veta pôvodne tvrdila, že jeden z prípadov
 REQ-05 je „pri schvaľovaní". Test však v oboch prípadoch volá
 `confirm_reservation()`.
+
+---
+
+## C03 — Architecture Evidence
+
+**Baseline:** v0.2 (nezmenená — C03 mení štruktúru, nie správanie)
+**Part A:** AS-IS mapovanie scenára `Confirm Reservation`,
+[architecture-and-decisions.md](architecture-and-decisions.md), oddiel „C03 časť A"
+
+**Drivers:** D-1 `BR-02` pri súbehu · D-2 stratený zápis nad jednou rezerváciou
+(`REQ-16`) · D-3 živosť a dočisťovanie žiadosti (`BR-08`, `TBD-08`) ·
+D-4 nenapojená notifikácia a chýbajúce čítanie (`TBD-03`, `TBD-09`).
+
+**Decision question:** Kde sa má vynucovať `BR-02`, aby platilo aj pri súbežnom
+potvrdzovaní a schvaľovaní, a kto ho vlastní?
+
+**Alternatives:** A — jediný vlastník v aplikácii + zámok nad riadkom prístroja.
+B — `EXCLUDE` constraint v databáze cez `btree_gist`.
+
+**Scenario walkthrough:** `Confirm` s komplikáciou „dve súbežné potvrdenia
+prekrývajúcich sa intervalov" (oddiel E3). Obe alternatívy správanie realizovať
+vedia; B rieši D-1 silnejšie, ale D-2 nerieši a D-3 rozbíja — `BR-08` závisí od
+aktuálneho času a constraint `now()` volať nesmie.
+
+**ADR:** ADR-01 — prijatá alternatíva A.
+
+**Views:** doménový triedny (C1) · kontext (G1) · statická architektúra (G2) ·
+vlastníctvo prechodov (G3, nad statechartom z C02) · runtime/deployment (G4) ·
+návrhový sekvenčný (H1) · zameraný návrhový triedny (H2).
+
+**Cross-view issues found/resolved:** dva, oba opravené v diagramoch pred
+zmenou kódu. (1) Prvý návrh G2 dával `Approval Workflow` vlastníctvo prechodu
+`PENDING_APPROVAL → CONFIRMED`, čím by invariant mal dvoch vlastníkov — presne
+to, čo ADR-01 ruší; opravené tak, že Approval Workflow prechod *žiada*.
+(2) Statechart z C02 nerozlišuje rozhodovateľa a žiadateľa; doplnené v G3 bez
+zmeny baseline.
+
+**AS-IS → TO-BE delta:** 6× `CHANGE`, 4× `KEEP`, 1× `VERIFY` (oddiel J).
+
+### Implementation changes
+
+| Zmena | Miesto |
+| ----- | ------ |
+| `_lock_reservation()` — zámok nad riadkom rezervácie (D-2) | `services/reservations.py` |
+| `_lock_instrument()` — zámok nad riadkom prístroja (D-1) | `services/reservations.py` |
+| `enter_blocking_state()` — jediný vlastník `BR-02` | `services/reservations.py` |
+| `confirm_reservation`, `cancel_reservation`, `decide_reservation` prepojené na zámky a na vlastníka invariantu | `services/reservations.py` |
+| zrušená mŕtva `rules.intervals_overlap()`, opravený komentár, ktorý o nej klamal | `domain/rules.py`, `services/reservations.py` |
+| prepísané testy súbehu — bariéra na vstupe operácie, 8 kôl, bez `xfail` | `tests/test_concurrency_req05.py` |
+| nová statická kontrola architektonického pravidla | `tests/test_architecture_conformance.py` |
+
+Poradie zámkov je v celej službe rovnaké — **najprv rezervácia, potom
+prístroj**. Opačné poradie na jedinom mieste by stačilo na deadlock.
+
+### Nález pri implementácii: test, ktorý by po oprave prestal testovať
+
+Toto je druhýkrát, čo nás tá istá trieda chyby skoro dostala, preto to tu
+stojí celé.
+
+Testy súbehu z C02 vešali bariéru **za** `_overlapping_blocking()`, teda
+dovnútra miesta, ktoré sa práve stalo kritickou sekciou. Po zavedení zámku:
+
+- prvé vlákno vzalo zámok, prešlo kontrolou a zastalo na bariére;
+- druhé vlákno uviazlo na zámku a k bariére sa nikdy nedostalo;
+- prvé po piatich sekundách vypršalo.
+
+Nameraný výsledok sondou:
+
+```
+outcomes: ['BrokenBarrierError', 'BrokenBarrierError']   final: DRAFT
+```
+
+Do databázy nezapísal nikto, takže pôvodné tvrdenie „najviac jedna blokujúca
+rezervácia" bolo pravdivé — a test by bol zelený bez toho, aby čokoľvek
+dokázal. Pri `xfail(strict=True)` by sa to navyše prejavilo len ako `XPASS`,
+teda ako dobrá správa.
+
+*Vyriešené dvoma pravidlami, obe sú napísané v hlavičke testu:*
+
+1. **Bariéra je na vstupe operácie**, pred prvým dotykom databázy. Zámok ju
+   nemôže zablokovať, a pritom je zaručené, že obe operácie naozaj bežia
+   súčasne.
+2. **Každý test tvrdí, že výsledky sú business výsledky** — konkrétne kódy,
+   nie názvy výnimiek. `assert sorted(outcomes) == ["OK", "OVERLAP"]` padne na
+   `BrokenBarrierError` aj na čomkoľvek inom, čo nie je rozhodnutie systému.
+
+Štartovacia bariéra ale nevynúti presné prekrytie, takže jedno kolo môže
+kolíziu minúť — pri prvom overení prešiel jeden z dvoch parametrov aj bez
+zámkov. Test preto beží **8 kôl**, každé s vlastným intervalom.
+
+### Zmenené tvrdenie o REQ-16
+
+Pôvodný test tvrdil `len(succeeded) <= 1` — teda že pri súbehu smie uspieť
+najviac jedna z operácií. To je **silnejšie, než hovorí `REQ-16`**. Po
+serializácii je legálna história „confirm, potom cancel": rezervácia opustí
+`DRAFT` práve raz a obe operácie oprávnene uspejú. Zakázaná je iná vec —
+zrušenie vráti úspech a rezervácia zostane potvrdená. Test to odteraz tvrdí
+priamo: ak `cancel` vrátil `OK`, koncový stav musí byť `CANCELLED`.
+
+### Behaviour verification
+
+`pytest -q` proti čistej databáze z `docker-compose.yml`:
+
+```
+92 passed in 1.32s
+```
+
+Žiadny `xfailed` — tri medzery prenesené z C02 sú zatvorené.
+
+| Overenie | Výsledok | Doklad |
+| -------- | -------- | ------ |
+| success path | prejde | `test_confirm_allocates_instrument`, `test_http_confirm_reservation` |
+| alternatívna vetva (prekryv → zamietnutie) | prejde | `test_confirm_rejects_overlap_and_keeps_draft`, `test_confirm_allows_adjacent_interval` |
+| hranice z C02 (`60:00`, `valid_until == starts_at`, dotyk intervalov) | prejdú nezmenené | `test_cancel_confirmed_boundary`, `test_certification_boundary`, `test_availability_interval_boundaries` |
+| **súbeh D-1** (`REQ-05`, obe vetvy `REQ-10`, 8 kôl) | prejde | `test_concurrent_conflicting_confirmations` |
+| **súbeh D-2** (`REQ-16`) | prejde | `test_concurrent_cancel_and_confirm_on_same_reservation` |
+
+Demo proti bežiacej aplikácii (`scripts/demo.py`) prebehlo po prestavbe celé —
+všetkých päť operácií vrátane `DRAFT → PENDING_APPROVAL → CONFIRMED`,
+zamietnutia aj vypršania. Žiadny endpoint sa zmenou nerozbil.
+
+**Dôkaz, že testy nie sú vákuové.** S dočasne vypnutými zámkami
+(`with_for_update=False`) padajú opakovane a s pôvodným príznakom:
+
+```
+AssertionError: kolo 0: ocakavame jedno potvrdenie a jedno zamietnutie
+pre prekryv, dostali sme ['OK', 'OK'] (dve subezne ziadosti)
+
+AssertionError: zrusenie vratilo uspech, ale koncovy stav je CONFIRMED -
+pouzivatel si mysli, ze zrusil rezervaciu, ktora blokuje pristroj
+(confirm=OK, cancel=OK)
+```
+
+Tri behy bez zámkov: `3 failed, 1 passed` zakaždým. Tri behy so zámkami:
+`4 passed` zakaždým.
+
+### Architecture conformance rule + result
+
+```
+Architektonické pravidlo:
+  Rezervácia smie vstúpiť do blokujúceho stavu (CONFIRMED, PENDING_APPROVAL)
+  iba cez enter_blocking_state(), a predikát BR-02 smie volať iba tá istá
+  funkcia — s jedinou výnimkou čítacej operácie check_availability(), ktorá
+  BR-02 iba reportuje a nič nemení.
+
+Kontrola:
+  tests/test_architecture_conformance.py — statická analýza AST nad celým
+  src/swilab. Nepotrebuje databázu ani bežiacu aplikáciu. Tri testy:
+    - zápis blokujúceho stavu mimo vlastníka invariantu,
+    - volanie predikátu BR-02 mimo povolených funkcií,
+    - poistka, že zoznam blokujúcich stavov v teste sedí s BLOCKING_STATES.
+
+Výsledok:
+  3 passed.
+
+  Overené aj opačne: po vložení porušenia (zápis CONFIRMED v
+  cancel_reservation) kontrola padne a pomenuje miesto:
+
+    Porusene pravidlo z ADR-01: blokujuci stav sa zapisuje mimo
+    enter_blocking_state().
+      src/swilab/services/reservations.py:392 (funkcia cancel_reservation)
+```
+
+Táto kontrola zároveň uzatvára riadok `VERIFY` z delty. Logické rozdelenie
+`Approval Workflow` / `Reservation Lifecycle` z G2 **nie je** fyzickým
+rozdelením modulov — obe sú v `services/reservations.py` — takže smer
+závislosti sa nedá overiť cez importy. Overuje sa tým, že `decide_reservation`
+invariant nevyhodnocuje sám, ale prechádza cez `enter_blocking_state()`.
+
+### Remaining uncertainty / risk
+
+1. **Invariant drží dohoda v kóde, nie schéma.** Zápis mimo aplikácie
+   `BR-02` poruší a databáza to nezachytí. Prijaté v ADR-01, dôsledok č. 1.
+2. **Serializácia na prístroj je nezmeraná.** Future pressure z C01 hovorí
+   o desaťnásobku súbežných rezervácií; zámok nad riadkom prístroja je presne
+   ten bod, kde sa to prejaví. Nemáme žiadne meranie.
+3. **`TBD-08` zostáva otvorené.** `EXPIRED` sa stále zapíše až pri operácii,
+   ktorá na žiadosť siahne. Zabudnutá žiadosť blokuje prístroj až do
+   `starts_at`. Je to zároveň podmienka, za ktorej by sa dal znovu otvoriť
+   ADR-01 v prospech alternatívy B.
+4. **`TBD-03` a `TBD-09` nedotknuté.** Driver D-4 je pomenovaný, ale toto kolo
+   ho nerieši — systém stále nemá čítaciu operáciu ani notifikácie, takže
+   schvaľovací tok je end-to-end nepoužiteľný mimo testov.
+5. **Prekryv sa už nedá testovať ako čistá funkcia.** Po zrušení
+   `intervals_overlap()` ho overuje iba test proti databáze.
+
+**Commit/tag:** vetva `feature/c03-architecture`, tag `c03-architecture` sa
+nastaví po zlúčení.
