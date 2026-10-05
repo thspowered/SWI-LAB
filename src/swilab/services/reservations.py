@@ -71,6 +71,37 @@ def _require_authorized(reservation: Reservation, requester: User) -> None:
         )
 
 
+def _lock_reservation(session: Session, reservation_id: uuid.UUID) -> Reservation:
+    """Nacita rezervaciu so zamkom nad jej riadkom (ADR-01).
+
+    Chrani prechod nad JEDNOU rezervaciou: kontrola zdrojoveho stavu
+    a zapis sa tym stavaju nedelitelnym krokom (REQ-16).
+    """
+    reservation = session.get(Reservation, reservation_id, with_for_update=True)
+    if reservation is None:
+        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    return reservation
+
+
+def _lock_instrument(session: Session, instrument_id: uuid.UUID) -> Instrument:
+    """Nacita pristroj so zamkom nad jeho riadkom (ADR-01).
+
+    Zamok nad pristrojom serializuje VSETKY rozhodnutia o BR-02 pre ten
+    isty pristroj. Riadok pristroja je tu zastupny zamok - nemeni sa,
+    sluzi len ako jediny bod, na ktorom sa stretnu sucasne potvrdenia
+    a schvalenia.
+
+    PORADIE ZAMKOV je v celej sluzbe rovnake: najprv rezervacia, potom
+    pristroj. Opacne poradie na inom mieste by vyrobilo deadlock.
+    """
+    instrument = session.get(Instrument, instrument_id, with_for_update=True)
+    if instrument is None:
+        raise DomainError(
+            ErrorCode.UNKNOWN_INSTRUMENT, f"pristroj {instrument_id} neexistuje"
+        )
+    return instrument
+
+
 def _overlapping_blocking(
     session: Session,
     instrument_id: uuid.UUID,
@@ -86,9 +117,14 @@ def _overlapping_blocking(
     starts_at, je vyprsana (BR-08) a do blokovania sa nepocita - preto do
     dotazu vstupuje cas.
 
-    Podmienka prekryvu je tu napisana v SQL, aby sa nenacitaval cely
-    kalendar pristroja. Je to ta ista nerovnost ako v rules.intervals_overlap
-    a testy ju porovnavaju s nou.
+    Podmienka prekryvu (BR-01) je napisana v SQL, aby sa nenacitaval cely
+    kalendar pristroja. Je to JEDINE miesto, kde tato nerovnost v kode
+    existuje - do v0.2 stala aj ako cista funkcia rules.intervals_overlap(),
+    ktoru vsak nic nevolalo ani netestovalo (nalez C03 cast A). ADR-01 dal
+    invariantu jedineho vlastnika, takze dvojnik bol zruseny.
+
+    Volat sa smie iba z enter_blocking_state() a z check_availability() -
+    strazi to tests/test_architecture_conformance.py.
     """
     stmt = select(Reservation).where(
         Reservation.instrument_id == instrument_id,
@@ -104,6 +140,45 @@ def _overlapping_blocking(
     if exclude_id is not None:
         stmt = stmt.where(Reservation.id != exclude_id)
     return list(session.scalars(stmt))
+
+
+def enter_blocking_state(
+    session: Session,
+    *,
+    reservation: Reservation,
+    target_state: ReservationState,
+    now: datetime,
+) -> None:
+    """JEDINE miesto, kde rezervacia vstupuje do blokujuceho stavu (ADR-01).
+
+    Vyhodnoti BR-02 a zapise cielovy stav. Kontrola a zapis su tu zamerne
+    vedla seba a bez commitu medzi nimi - to je obsah REQ-05.
+
+    PREDPOKLAD VOLAJUCEHO: uz drzi zamok nad prislusnym pristrojom
+    (_lock_instrument). Bez neho je kontrola prekryvu iba odporucanie.
+
+    Invariant BR-02 ma po tejto zmene jedineho vlastnika. Kazdy dalsi
+    blokujuci stav alebo dalsia operacia musi prejst tadialto - strazi to
+    tests/test_architecture_conformance.py.
+    """
+    if target_state not in BLOCKING_STATES:
+        raise ValueError(f"{target_state} nie je blokujuci stav")
+
+    conflicts = _overlapping_blocking(
+        session,
+        reservation.instrument_id,
+        reservation.starts_at,
+        reservation.ends_at,
+        now,
+        exclude_id=reservation.id,
+    )
+    if conflicts:
+        raise DomainError(
+            ErrorCode.OVERLAP,
+            "interval koliduje s inou rezervaciou toho isteho pristroja "
+            "v blokujucom stave",
+        )
+    reservation.state = target_state
 
 
 def create_reservation(
@@ -215,9 +290,7 @@ def confirm_reservation(
     implementacia NEGARANTUJE - medzi kontrolou prekryvu a zapisom je
     okno. Je to vedomy stav a hlavny architektonicky driver pre C03.
     """
-    reservation = session.get(Reservation, reservation_id)
-    if reservation is None:
-        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    reservation = _lock_reservation(session, reservation_id)
 
     requester = _require_user(session, requested_by)
     _require_authorized(reservation, requester)
@@ -233,7 +306,7 @@ def confirm_reservation(
             "rezervaciu po jej zaciatku uz nemozno potvrdit",
         )
 
-    instrument = _require_instrument(session, reservation.instrument_id)
+    instrument = _lock_instrument(session, reservation.instrument_id)
     if not instrument.is_active:
         raise DomainError(ErrorCode.INSTRUMENT_INACTIVE, "pristroj nie je aktivny")
 
@@ -252,27 +325,15 @@ def confirm_reservation(
             "pouzivatel nema platny certifikat na kategoriu pristroja",
         )
 
-    conflicts = _overlapping_blocking(
-        session,
-        reservation.instrument_id,
-        reservation.starts_at,
-        reservation.ends_at,
-        now,
-        exclude_id=reservation.id,
-    )
-    if conflicts:
-        raise DomainError(
-            ErrorCode.OVERLAP,
-            "interval koliduje s inou rezervaciou toho isteho pristroja "
-            "v blokujucom stave",
-        )
-
     # REQ-10: pristroj rozhoduje, ci rezervacia rovno alokuje, alebo sa
     # stava ziadostou. Blokuje pristroj v oboch pripadoch.
-    reservation.state = (
+    target_state = (
         ReservationState.PENDING_APPROVAL
         if instrument.requires_approval
         else ReservationState.CONFIRMED
+    )
+    enter_blocking_state(
+        session, reservation=reservation, target_state=target_state, now=now
     )
     session.commit()
     return reservation
@@ -294,9 +355,7 @@ def cancel_reservation(
     ma prednost pred politikou rusenia (BR-03). Obe pravidla davali pre
     ziadost po starts_at opacnu odpoved - nalez N-04.
     """
-    reservation = session.get(Reservation, reservation_id)
-    if reservation is None:
-        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    reservation = _lock_reservation(session, reservation_id)
 
     requester = _require_user(session, requested_by)
     _require_authorized(reservation, requester)
@@ -361,9 +420,7 @@ def decide_reservation(
     kontrolou prekryvu a zapisom je okno. Navyse plati strata zapisu nad
     tou istou rezervaciou - viz tests/test_concurrency_req05.py.
     """
-    reservation = session.get(Reservation, reservation_id)
-    if reservation is None:
-        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    reservation = _lock_reservation(session, reservation_id)
 
     # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost. Bez
     # druhej podmienky by schvalovanie pre veduceho neexistovalo a pravidlo
@@ -406,7 +463,7 @@ def decide_reservation(
         session.commit()
         return reservation
 
-    instrument = _require_instrument(session, reservation.instrument_id)
+    instrument = _lock_instrument(session, reservation.instrument_id)
     if not instrument.is_active:
         raise DomainError(ErrorCode.INSTRUMENT_INACTIVE, "pristroj nie je aktivny")
 
@@ -425,20 +482,11 @@ def decide_reservation(
             "vlastnik rezervacie nema platny certifikat na kategoriu pristroja",
         )
 
-    conflicts = _overlapping_blocking(
+    enter_blocking_state(
         session,
-        reservation.instrument_id,
-        reservation.starts_at,
-        reservation.ends_at,
-        now,
-        exclude_id=reservation.id,
+        reservation=reservation,
+        target_state=ReservationState.CONFIRMED,
+        now=now,
     )
-    if conflicts:
-        raise DomainError(
-            ErrorCode.OVERLAP,
-            "interval medzitym obsadila ina rezervacia toho isteho pristroja",
-        )
-
-    reservation.state = ReservationState.CONFIRMED
     session.commit()
     return reservation
