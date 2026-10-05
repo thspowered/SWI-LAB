@@ -388,6 +388,12 @@ v databáze) a boli spevnené.
 86 passed, 3 xfailed
 ```
 
-Tri `xfailed` sú tri doložené medzery, všetky s reprodukovateľným výstupom:
-REQ-05 pri potvrdení, REQ-05 pri schvaľovaní (obe vetvy REQ-10) a REQ-16
-(stratený zápis). Všetky tri sú vstup pre C03.
+Tri `xfailed` dokladajú dve medzery, všetky s reprodukovateľným výstupom:
+REQ-05 pri potvrdení v oboch vetvách REQ-10 (prístroj bez schvaľovania →
+dve `CONFIRMED`, so schvaľovaním → dve `PENDING_APPROVAL`) a REQ-16
+(stratený zápis). Oba prípady REQ-05 volajú OP-03; súbežné **schvaľovanie**
+(OP-05) test nemá. Obe medzery sú vstup pre C03.
+
+*Opravené v C03 časti A:* táto veta pôvodne tvrdila, že jeden z prípadov
+REQ-05 je „pri schvaľovaní". Test však v oboch prípadoch volá
+`confirm_reservation()`.
