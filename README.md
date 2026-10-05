@@ -161,6 +161,26 @@ operácií. Architektúru tejto cesty rieši až C03.
 Tri doložené medzery (REQ-05 pri potvrdení, REQ-05 pri schvaľovaní, REQ-16)
 sú zámerne nesplnené a sú vstupom pre C03.
 
+## C03 Definition of Done
+
+- [x] 3–5 driverov podložených požiadavkami a evidenciou (D-1..D-4)
+- [x] doménový model konzistentný s C02
+- [x] významné odpovednosti explicitné, s ownership požiadavkami (O-1..O-8)
+- [x] jedna rozhodovacia otázka, dve materiálne odlišné alternatívy
+- [x] alternatívy porovnané voči driverom a prevedené tým istým scenárom
+- [x] ADR-01 vrátane prijatých negatívnych dôsledkov a „reconsider when"
+- [x] kontext, statická architektúra, ownership prechodov a runtime sú konzistentné
+- [x] scenár realizovaný návrhovým sekvenčným diagramom
+- [x] návrhový triedny diagram podporuje tú istú realizáciu
+- [x] cross-view kontrola vykonaná pred zmenou kódu (našla dva rozpory)
+- [x] AS-IS → TO-BE delta s `CHANGE` / `KEEP` / `VERIFY`
+- [x] behaviour verification z C02 po zmene prechádza — `92 passed`
+- [x] opakovateľná kontrola chráni architektonické pravidlo z ADR-01
+- [x] evidence a commit zaznamenané
+
+Tri medzery prenesené z C02 (`REQ-05` v oboch vetvách, `REQ-16`) sú
+**zatvorené** — testy už nie sú `xfail`.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
