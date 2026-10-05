@@ -66,11 +66,24 @@ Tento oddiel popisuje, ako **súčasná** implementácia realizuje jeden scenár
 z baseline v0.2. Nie je to cieľový návrh.
 
 **Spôsob overenia.** Mapovanie krokov, vetiev a závislostí je overené čítaním
-kódu na uvedených riadkoch a existenciou menovaných testov (`git grep`). Testová
-sada **nebola pri písaní tohto oddielu spustená** — posledný doložený beh je
-`86 passed, 3 xfailed` z C02, viď [evidence-and-evolution.md](evidence-and-evolution.md).
-Pred review treba sadu pustiť znova; riadkové odkazy platia pre stav vetvy
-`feature/c03-as-is-confirm`.
+kódu na uvedených riadkoch. Testová sada bola pre tento oddiel spustená proti
+čistej databáze z `docker-compose.yml`:
+
+```
+86 passed, 3 xfailed in 4.41s
+```
+
+Všetky testy menované v stĺpcoch *Doklad* v tomto oddiele sú v tomto behu
+zahrnuté a prechádzajú. Tri `xfailed` sú presne tie tri doložené medzery, ktoré
+uvádza A3 a evidence z C02:
+
+```
+XFAIL test_concurrent_conflicting_confirmations[False-dve subezne potvrdenia -> najviac jedna CONFIRMED]
+XFAIL test_concurrent_conflicting_confirmations[True-dve subezne ziadosti -> najviac jedna PENDING_APPROVAL]
+XFAIL test_concurrent_cancel_and_confirm_on_same_reservation
+```
+
+Riadkové odkazy platia pre stav vetvy `feature/c03-as-is-confirm`.
 
 ## A1. Sledovaný scenár
 
