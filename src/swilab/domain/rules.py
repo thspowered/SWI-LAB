@@ -20,17 +20,6 @@ def is_interval_valid(starts_at: datetime, ends_at: datetime) -> bool:
     return ends_at > starts_at
 
 
-def intervals_overlap(
-    a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime
-) -> bool:
-    """BR-01: prekryv polootvorenych intervalov.
-
-    Susediace intervaly ([10,11) a [11,12)) sa NEPREKRYVAJU - preto su obe
-    porovnania ostre.
-    """
-    return a_start < b_end and b_start < a_end
-
-
 def certification_covers(valid_until: datetime, starts_at: datetime) -> bool:
     """BR-04: certifikat plati k zaciatku rezervacie.
 

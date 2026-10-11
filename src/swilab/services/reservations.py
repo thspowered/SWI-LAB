@@ -5,7 +5,17 @@ funkcii sedi s diagramom aktivit v docs/diagrams.md; ked sa poradie zmeni
 tam, musi sa zmenit aj tu, inak bude aplikacia vracat iny kod chyby, nez
 hovori specifikacia.
 
-Struktura je zamerne jednoducha - C02 riesi spravanie, nie architekturu.
+Struktura podla C03 (docs/architecture-and-decisions.md, G2 a ADR-01).
+Logicke prvky architektury su FUNKCIE tohto modulu, nie samostatne subory:
+
+  Reservation Lifecycle   confirm_reservation, cancel_reservation,
+                          create_reservation, enter_blocking_state,
+                          expire_request_if_dead + zamky a predikat BR-02
+  Approval Workflow       decide_reservation
+  Availability Query      check_availability
+
+Priradenie funkcia -> prvok a smer zavislosti medzi prvkami strazi
+tests/test_architecture_conformance.py.
 """
 
 import uuid
@@ -71,6 +81,48 @@ def _require_authorized(reservation: Reservation, requester: User) -> None:
         )
 
 
+def _lock_reservation(session: Session, reservation_id: uuid.UUID) -> Reservation:
+    """Nacita rezervaciu so zamkom nad jej riadkom (ADR-01).
+
+    Chrani prechod nad JEDNOU rezervaciou: kontrola zdrojoveho stavu
+    a zapis sa tym stavaju nedelitelnym krokom (REQ-16).
+    """
+    reservation = session.get(Reservation, reservation_id, with_for_update=True)
+    if reservation is None:
+        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    return reservation
+
+
+def _lock_instrument(session: Session, instrument_id: uuid.UUID) -> Instrument:
+    """Nacita pristroj so zamkom nad jeho riadkom (ADR-01).
+
+    Zamok nad pristrojom serializuje VSETKY rozhodnutia o BR-02 pre ten
+    isty pristroj. Riadok pristroja je tu zastupny zamok - nemeni sa,
+    sluzi len ako jediny bod, na ktorom sa stretnu sucasne potvrdenia
+    a schvalenia.
+
+    Rezim je FOR NO KEY UPDATE, nie FOR UPDATE: dva taketo zamky sa
+    navzajom vylucuju, ale nekoliduju s FOR KEY SHARE, ktory si berie
+    kontrola cudzieho kluca. Pri FOR UPDATE by kriticka sekcia blokovala
+    aj vytvorenie DRAFT rezervacie toho isteho pristroja (OP-01), hoci
+    DRAFT o BR-02 nerozhoduje.
+
+    Vola ho IBA enter_blocking_state() - zamok si berie vlastnik invariantu
+    sam, nie jeho volajuci.
+
+    PORADIE ZAMKOV je v celej sluzbe rovnake: najprv rezervacia, potom
+    pristroj. Opacne poradie na inom mieste by vyrobilo deadlock.
+    """
+    instrument = session.get(
+        Instrument, instrument_id, with_for_update={"key_share": True}
+    )
+    if instrument is None:
+        raise DomainError(
+            ErrorCode.UNKNOWN_INSTRUMENT, f"pristroj {instrument_id} neexistuje"
+        )
+    return instrument
+
+
 def _overlapping_blocking(
     session: Session,
     instrument_id: uuid.UUID,
@@ -86,9 +138,14 @@ def _overlapping_blocking(
     starts_at, je vyprsana (BR-08) a do blokovania sa nepocita - preto do
     dotazu vstupuje cas.
 
-    Podmienka prekryvu je tu napisana v SQL, aby sa nenacitaval cely
-    kalendar pristroja. Je to ta ista nerovnost ako v rules.intervals_overlap
-    a testy ju porovnavaju s nou.
+    Podmienka prekryvu (BR-01) je napisana v SQL, aby sa nenacitaval cely
+    kalendar pristroja. Je to JEDINE miesto, kde tato nerovnost v kode
+    existuje - do C03 stala aj ako cista funkcia rules.intervals_overlap(),
+    ktoru vsak nic nevolalo ani netestovalo (nalez C03 cast A). ADR-01 dal
+    invariantu jedineho vlastnika, takze dvojnik bol zruseny.
+
+    Volat sa smie iba z enter_blocking_state() a z check_availability() -
+    strazi to tests/test_architecture_conformance.py.
     """
     stmt = select(Reservation).where(
         Reservation.instrument_id == instrument_id,
@@ -104,6 +161,76 @@ def _overlapping_blocking(
     if exclude_id is not None:
         stmt = stmt.where(Reservation.id != exclude_id)
     return list(session.scalars(stmt))
+
+
+def enter_blocking_state(
+    session: Session,
+    *,
+    reservation: Reservation,
+    target_state: ReservationState,
+    now: datetime,
+) -> None:
+    """JEDINE miesto, kde rezervacia vstupuje do blokujuceho stavu (ADR-01).
+
+    Vezme zamok nad pristrojom, vyhodnoti BR-02 a zapise cielovy stav.
+    Zamok, kontrola a zapis su tu zamerne vedla seba a bez commitu medzi
+    nimi - to je obsah REQ-05. Zamok si funkcia berie SAMA: keby bol
+    predpokladom volajuceho, stacilo by ho v jednej operacii vynechat
+    a kontrola prekryvu by bola iba odporucanie.
+
+    Kriticku sekciu ukonci commit (alebo rollback) volajucej operacie.
+
+    PREDPOKLAD: transakcia bezi v READ COMMITTED (nastavuje db.py). Dotaz
+    na prekryv musi po cakani na zamok vidiet zapis, ktory medzitym
+    commitol sused; v REPEATABLE READ by videl stary snapshot a presli by
+    obe potvrdenia.
+
+    Invariant BR-02 ma jedineho vlastnika. Kazdy dalsi blokujuci stav
+    alebo dalsia operacia musi prejst tadialto - strazi to
+    tests/test_architecture_conformance.py.
+    """
+    if target_state not in BLOCKING_STATES:
+        raise ValueError(f"{target_state} nie je blokujuci stav")
+
+    _lock_instrument(session, reservation.instrument_id)
+    conflicts = _overlapping_blocking(
+        session,
+        reservation.instrument_id,
+        reservation.starts_at,
+        reservation.ends_at,
+        now,
+        exclude_id=reservation.id,
+    )
+    if conflicts:
+        raise DomainError(
+            ErrorCode.OVERLAP,
+            "interval koliduje s inou rezervaciou toho isteho pristroja "
+            "v blokujucom stave",
+        )
+    reservation.state = target_state
+
+
+def expire_request_if_dead(
+    session: Session, *, reservation: Reservation, now: datetime
+) -> None:
+    """JEDINE miesto, kde sa zapisuje EXPIRED (BR-08, REQ-15, nalez N-04).
+
+    Ziadost, ktorej uz nastal starts_at, sa pri operacii, ktora na nu
+    smeruje (OP-04, OP-05), zapise ako EXPIRED a operacia sa zamietne.
+    Je to jedine miesto v sluzbe, kde operacia zmeni stav a napriek tomu
+    skonci zamietnutim - preto commit pred vynimkou.
+
+    Pre ine stavy nez PENDING_APPROVAL nerobi nic: DRAFT nevyprsi (N-05).
+    """
+    if reservation.state is not ReservationState.PENDING_APPROVAL:
+        return
+    if approval_request_is_alive(reservation.starts_at, now):
+        return
+    reservation.state = ReservationState.EXPIRED
+    session.commit()
+    raise DomainError(
+        ErrorCode.EXPIRED, "ziadost o schvalenie vyprsala - jej termin uz zacal"
+    )
 
 
 def create_reservation(
@@ -211,13 +338,12 @@ def confirm_reservation(
     operacia - to, ci za nou nasleduje rozhodnutie veduceho, je vlastnost
     pristroja, nie iny zamer.
 
-    REQ-05 (pri subehu najviac jedna rezervacia v blokujucom stave) tato
-    implementacia NEGARANTUJE - medzi kontrolou prekryvu a zapisom je
-    okno. Je to vedomy stav a hlavny architektonicky driver pre C03.
+    REQ-05 (pri subehu najviac jedna rezervacia v blokujucom stave)
+    a REQ-16 (rezervacia opusti DRAFT najviac raz) garantuje ADR-01:
+    zamok nad riadkom rezervacie drzi tato funkcia od prveho kroku
+    a o BR-02 rozhoduje enter_blocking_state() pod zamkom pristroja.
     """
-    reservation = session.get(Reservation, reservation_id)
-    if reservation is None:
-        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    reservation = _lock_reservation(session, reservation_id)
 
     requester = _require_user(session, requested_by)
     _require_authorized(reservation, requester)
@@ -252,27 +378,15 @@ def confirm_reservation(
             "pouzivatel nema platny certifikat na kategoriu pristroja",
         )
 
-    conflicts = _overlapping_blocking(
-        session,
-        reservation.instrument_id,
-        reservation.starts_at,
-        reservation.ends_at,
-        now,
-        exclude_id=reservation.id,
-    )
-    if conflicts:
-        raise DomainError(
-            ErrorCode.OVERLAP,
-            "interval koliduje s inou rezervaciou toho isteho pristroja "
-            "v blokujucom stave",
-        )
-
     # REQ-10: pristroj rozhoduje, ci rezervacia rovno alokuje, alebo sa
     # stava ziadostou. Blokuje pristroj v oboch pripadoch.
-    reservation.state = (
+    target_state = (
         ReservationState.PENDING_APPROVAL
         if instrument.requires_approval
         else ReservationState.CONFIRMED
+    )
+    enter_blocking_state(
+        session, reservation=reservation, target_state=target_state, now=now
     )
     session.commit()
     return reservation
@@ -294,9 +408,7 @@ def cancel_reservation(
     ma prednost pred politikou rusenia (BR-03). Obe pravidla davali pre
     ziadost po starts_at opacnu odpoved - nalez N-04.
     """
-    reservation = session.get(Reservation, reservation_id)
-    if reservation is None:
-        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    reservation = _lock_reservation(session, reservation_id)
 
     requester = _require_user(session, requested_by)
     _require_authorized(reservation, requester)
@@ -317,15 +429,7 @@ def cancel_reservation(
 
     # Nalez N-04: vyprsana ziadost sa v KAZDEJ operacii, ktora ju cita,
     # povazuje za EXPIRED. Stav sa zapise a zrusenie sa zamietne.
-    if reservation.state is ReservationState.PENDING_APPROVAL and not (
-        approval_request_is_alive(reservation.starts_at, now)
-    ):
-        reservation.state = ReservationState.EXPIRED
-        session.commit()
-        raise DomainError(
-            ErrorCode.EXPIRED,
-            "ziadost o schvalenie vyprsala - jej termin uz zacal",
-        )
+    expire_request_if_dead(session, reservation=reservation, now=now)
 
     if reservation.state is ReservationState.CONFIRMED and not may_cancel_confirmed(
         reservation.starts_at, now
@@ -357,13 +461,14 @@ def decide_reservation(
     podani ziadosti. Medzitym ubehol lubovolne dlhy cas: zaznam certifikatu
     sa mohol zmenit, pristroj ist do servisu, termin obsadit niekto iny.
 
-    Rovnaka medzera v subehu ako pri confirm_reservation (REQ-05): medzi
-    kontrolou prekryvu a zapisom je okno. Navyse plati strata zapisu nad
-    tou istou rezervaciou - viz tests/test_concurrency_req05.py.
+    Tato funkcia je Approval Workflow z G2: vlastni rozhodnutie veduceho
+    (BR-07, zapis REJECTED). Schvalenie pristroj ALOKUJE, preto ho sama
+    nezapisuje - prechod si ziada od enter_blocking_state(), vlastnika
+    BR-02 (ADR-01). Rovnako vyprsanie nezapisuje sama, ale cez
+    expire_request_if_dead(). Zamok nad riadkom rezervacie chrani subeh
+    so zrusenim a s druhym rozhodnutim (REQ-16).
     """
-    reservation = session.get(Reservation, reservation_id)
-    if reservation is None:
-        raise DomainError(ErrorCode.NOT_FOUND, f"rezervacia {reservation_id} neexistuje")
+    reservation = _lock_reservation(session, reservation_id)
 
     # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost. Bez
     # druhej podmienky by schvalovanie pre veduceho neexistovalo a pravidlo
@@ -391,12 +496,7 @@ def decide_reservation(
 
     # REQ-15: vyprsana ziadost sa nedostane k rozhodnutiu, ale stav sa
     # zapise - inak by zostala navzdy visiet v PENDING_APPROVAL.
-    if not approval_request_is_alive(reservation.starts_at, now):
-        reservation.state = ReservationState.EXPIRED
-        session.commit()
-        raise DomainError(
-            ErrorCode.EXPIRED, "ziadost o schvalenie vyprsala - jej termin uz zacal"
-        )
+    expire_request_if_dead(session, reservation=reservation, now=now)
 
     # REQ-12: zamietnut sa da aj ziadost, ktora by sa uz schvalit nedala
     # (pristroj v servise, expirovany certifikat). Inak by taka ziadost
@@ -425,20 +525,11 @@ def decide_reservation(
             "vlastnik rezervacie nema platny certifikat na kategoriu pristroja",
         )
 
-    conflicts = _overlapping_blocking(
+    enter_blocking_state(
         session,
-        reservation.instrument_id,
-        reservation.starts_at,
-        reservation.ends_at,
-        now,
-        exclude_id=reservation.id,
+        reservation=reservation,
+        target_state=ReservationState.CONFIRMED,
+        now=now,
     )
-    if conflicts:
-        raise DomainError(
-            ErrorCode.OVERLAP,
-            "interval medzitym obsadila ina rezervacia toho isteho pristroja",
-        )
-
-    reservation.state = ReservationState.CONFIRMED
     session.commit()
     return reservation

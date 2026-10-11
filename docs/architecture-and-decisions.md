@@ -97,8 +97,11 @@ Sada predpokladá, že PostgreSQL beží s `TimeZone = UTC` (predvolené v obraz
 `test_persistence_spike.py` na asserte `utcoffset() == 0` — to je zámer spiku
 z C01, nie chyba aplikácie.
 
-Riadkové odkazy platia pre kód v commite `ec7ccdc` (`main`). Táto vetva kód
-nemení, takže po zlúčení platia ďalej.
+Riadkové odkazy platia pre kód v commite `ec7ccdc` — stav `main` pred C03.
+Časť A je **snímka AS-IS** a zámerne sa neprepisuje. Implementácia ADR-01
+(oddiel „C03 — Architektúra", delta v J) službu zmenila: tie isté miesta ležia
+v aktuálnom kóde inde a dve rozhodovacie miesta z A5 už neexistujú. Odkazy sa
+dajú overiť cez `git show ec7ccdc:src/swilab/services/reservations.py`.
 
 ## A1. Sledovaný scenár
 
@@ -313,3 +316,646 @@ nepozná `db.py` — session dostane ako parameter od API.
 | **Otázka** | Kde má byť vynútený invariant `BR-02`, keď o ňom dnes rozhodujú dve operácie — každá s vlastnou kontrolou a vlastným zápisom — a jeho predikát existuje v dvoch formách, z ktorých jedna je mŕtvy kód? |
 | **Doklad** | `_overlapping_blocking()` (`services/reservations.py:74`) je volaný z `confirm_reservation()` `:255` (zápis `:272–277`) aj z `decide_reservation()` `:428` (zápis `:442–443`). Podmienka je napísaná v SQL. Paralelná čistá funkcia `rules.intervals_overlap()` (`domain/rules.py:23`) nie je v kóde nikde volaná ani testovaná, hoci komentár na `services/reservations.py:90–91` tvrdí opak. |
 | **Prečo je dôležitá** | `BR-02` je jediný invariant systému nad viacerými záznamami (`specification.md`, BR-02). Vo v0.1 ho vynucovalo jedno miesto, vo v0.2 už dve — pridanie ďalšieho blokujúceho stavu alebo ďalšej operácie ho rozšíri znova, a každé miesto musí pamätať aj na podmienku živosti žiadosti (`BR-08`). Zároveň je to tá istá hranica, na ktorej zlyháva `REQ-05`: kontrola a zápis nie sú atomické. Rozhodnutie, *kam* invariant patrí — do servisnej vrstvy, do jedného doménového predikátu, alebo do databázového constraintu — určí, či sa `REQ-05` dá vôbec uzavrieť bez toho, aby sa oprava musela urobiť dvakrát. |
+
+---
+
+# C03 — Architektúra
+
+Nadväzuje na časť A (AS-IS mapovanie scenára `Confirm Reservation`).
+Baseline správania zostáva **v0.2**; táto časť nemení špecifikáciu, mení
+*štruktúru* implementácie a dopĺňa rozhodnutie, ktoré v nej doteraz chýbalo.
+
+## B. Architektonické drivery
+
+Štyri drivery, všetky prenesené z C02 (`evidence-and-evolution.md`,
+„Architektonické drivery prenesené do C03" a „Architektonické drivery, ktoré
+zmena odkryla") alebo z revízie v0.2. Prvé dva boli pri vstupe do C03 doložené
+padajúcimi testami, tretí a štvrtý vznikli zmenou v0.2.
+
+| Podklad / zdroj | Prečo ovplyvňuje architektúru | Otázka, ktorú musí architektúra vyriešiť |
+| --------------- | ----------------------------- | ---------------------------------------- |
+| **D-1** · `BR-02`, `REQ-04`, `REQ-05`; časť A A3/A5 | Kontrola prekryvu a zápis stavu sú dva kroky bez spoločnej ochrany. Dve súbežné potvrdenia oba prečítajú „bez konfliktu" a oba zapíšu. Navyše o invariante rozhodujú **dve** operácie — `confirm` aj `approve` — každá s vlastnou kópiou postupu. | Kde sa má urobiť autoritatívne rozhodnutie o potvrdení, aby `BR-02` platilo aj pri súbehu, a kto ten invariant vlastní? |
+| **D-2** · `REQ-16`, nález N-07 (revízia v0.2); časť A A3 | To isté okno, ale nad **jednou** rezerváciou: medzi kontrolou zdrojového stavu a zápisom. Týka sa aj zrušenia, kde `REQ-05` nefiguruje. Pozorovateľný dôsledok: používateľ dostane na zrušenie úspech a rezervácia pritom blokuje prístroj. | Kto zaručí, že rezervácia opustí daný stav najviac raz, aj keď o ňu súperia dve rôzne operácie? |
+| **D-3** · zmena v0.2 (schvaľovanie), `BR-08`, `TBD-08` | Žiadosť žije ďalej po skončení requestu, ktorý ju vytvoril. `EXPIRED` sa dnes zapíše len vtedy, keď na záznam niekto siahne — zabudnutá žiadosť ticho blokuje prístroj až do `starts_at`. | Kto vlastní stav čakajúcej žiadosti a kto vykoná neskorší prechod, keď ho nevyvolá žiadny používateľ? |
+| **D-4** · `TBD-03`, `TBD-09`; časť A A6 | Notification Service nie je v kóde napojená a systém nemá **žiadnu** čítaciu operáciu. Vedúci sa o žiadosti nedozvie a žiadateľ sa nedozvie výsledok. Business zmena sa pritom uloží skôr, než by sa správa odoslala. | Kde má byť integrácia izolovaná a má jej zlyhanie zmeniť výsledok potvrdenia? |
+
+Žiadny z driverov nepomenúva riešenie. `transakcia`, `zámok`, `constraint`,
+`worker` sú kandidáti na mechanizmus, nie drivery.
+
+Dva drivery prenesené z C02 v tabuľke samostatne **nie sú** — nie preto, že by
+prestali platiť:
+
+- **Zdroj času ako závislosť** je už vyriešený (`clock.py`, odovzdávanie `now`
+  do služieb). Do tejto architektúry vstupuje ako odpovednosť O-6 a prvok
+  `Clock`; v delte je `KEEP`.
+- **Schéma bez migrácií** nie je otázka tohto scenára, ale obmedzenie pri
+  výbere: vstupuje do porovnania v E2 ako prevádzková zložitosť a hovorí proti
+  alternatíve B. Samostatné rozhodnutie o migráciách zostáva otvorené.
+
+## C1. Doménový model
+
+```mermaid
+classDiagram
+    class Reservation {
+        +UUID id
+        +ReservationState state
+        +TimeInterval interval
+        +datetime created_at
+    }
+    class Instrument {
+        +UUID id
+        +String name
+        +InstrumentCategory category
+        +bool is_active
+        +bool requires_approval
+    }
+    class User {
+        +UUID id
+        +String full_name
+        +UserRole role
+    }
+    class Certification {
+        +InstrumentCategory category
+        +datetime valid_until
+    }
+    class TimeInterval {
+        <<value object>>
+        +datetime starts_at
+        +datetime ends_at
+        +overlaps(other) bool
+    }
+    class ReservationState {
+        <<enumeration>>
+        DRAFT
+        PENDING_APPROVAL
+        CONFIRMED
+        CANCELLED
+        REJECTED
+        EXPIRED
+    }
+
+    Instrument "1" --> "0..*" Reservation : je rezervovaný
+    User "1" --> "0..*" Reservation : žiada
+    User "1" --> "0..*" Certification : má
+    Reservation "1" *-- "1" TimeInterval
+    Reservation "1" --> "1" ReservationState
+    Certification ..> Instrument : pokrýva kategóriu
+```
+
+Invariant pri vzťahu `Instrument → Reservation`:
+
+> Pre jeden `Instrument` sa nesmú prekrývať `TimeInterval`-y dvoch rezervácií
+> v **blokujúcom** stave (`CONFIRMED`, alebo živá `PENDING_APPROVAL` podľa
+> `BR-08`). — `BR-02`
+
+`TimeInterval` je v modeli ako value object zámerne: `BR-01` je vlastnosť
+intervalu, nie rezervácie. V dnešnom kóde sú to dva stĺpce — rozdiel je
+zaznamenaný v delte (J) ako `KEEP`, lebo pre rozhodnutie z ADR-01 nemá dôsledok.
+
+Model neobsahuje `Controller`, `Repository` ani frameworkové triedy.
+
+## C2. Odpovednosti systému
+
+| Zdroj | Odpovednosť | Čo musí rozhodovať / vlastniť | Jeden jasný vlastník? | Dôvod |
+| ----- | ----------- | ----------------------------- | --------------------- | ----- |
+| **O-1** · OP-03 + statechart | rozhodnúť, či je prechod rezervácie povolený | životný cyklus jednej rezervácie vrátane vypršania žiadosti (`BR-08`) | **áno** | dve operácie nesmú o tom istom zdrojovom stave rozhodnúť rozdielne (`D-2`) |
+| **O-2** · `BR-02`, `REQ-05` | vyhodnotiť konflikt a zachovať invariant | rozhodnutie o vstupe do blokujúceho stavu a kritická sekcia okolo neho | **áno** | súbeh nesmie porušiť invariant; dnes o ňom rozhodujú dve miesta (`D-1`) |
+| **O-3** · `BR-04`, `BR-05`, `BR-06`, `BR-07` | overiť predpoklady operácie | predikáty pravidiel | nie | sú to čisté funkcie bez stavu; smie ich volať ktokoľvek |
+| **O-4** · OP-02 | odpovedať na dostupnosť | nič — len číta | nie | čítacia operácia, výsledok nič nealokuje |
+| **O-5** · zmena v0.2, OP-05 | rozhodnúť o čakajúcej žiadosti | rozhodnutie vedúceho: schváliť alebo zamietnuť (`REJECTED`) | **áno** | žiadosť prežije request, ktorý ju vytvoril, a nesmú o nej platiť dve rozhodnutia (`D-3`, `D-2`) |
+| **O-6** · `BR-03`, `BR-08` | poskytnúť čas pravidlám | jediný zdroj „teraz" | **áno** | dve pravidlá v jednej operácii musia vidieť ten istý okamih |
+| **O-7** · `TBD-03` | doručiť notifikáciu | doručenie a opakovanie | podľa návrhu | externé zlyhanie musí mať definovaný význam (`D-4`) |
+| **O-8** · perzistencia | uložiť a načítať stav | mapovanie na tabuľky, pripojenie a session, úroveň izolácie | **áno** | do databázy má viesť jedna cesta s jedným nastavením (časť A, A6) |
+
+Zoskupenie a oddelenie:
+
+- **O-1 a O-2 musia byť spolu.** Zdieľajú ten istý zápis. Keby rozhodnutie
+  o prekryve robilo iné miesto než zápis stavu, vznikne medzi nimi okno —
+  presne to, čo dokladajú `REQ-05` a `REQ-16`.
+- **O-5 má byť oddelené od O-1 v zodpovednosti, nie v zápise.** Schvaľovanie má
+  vlastný dôvod na zmenu (politika vedúceho — kto smie rozhodnúť a o čom), ale
+  výsledný prechod do blokujúceho stavu musí prejsť cez vlastníka `O-2`. Inak
+  má invariant dvoch vlastníkov, čo je dnešný stav.
+- **Vypršanie žiadosti patrí k O-1, nie k O-5.** Nevyvoláva ho rozhodnutie
+  človeka, ale čas, a tá istá podmienka živosti (`BR-08`) určuje, či žiadosť
+  blokuje. Keby ho zapisovalo schvaľovanie aj zrušenie, mal by stav `EXPIRED`
+  dvoch vlastníkov.
+- **Hranica transakcie patrí k operácii, ktorá prechod vykonáva (O-1, O-5),
+  nie k O-8.** Commit kritickú sekciu z `O-2` ukončuje a uvoľňuje zámky;
+  úložisko nevie, kedy je rozhodnutie hotové. O-8 dodáva session a mapovanie.
+- **O-7 má byť oddelené od všetkého ostatného.** Iná technológia, iná
+  dôveryhodnostná hranica, iný režim zlyhania.
+- **O-3 a O-6 nesmú poznať perzistenciu.** Sú to čisté funkcie; práve preto sa
+  dajú hranice (`60:00`, `valid_until == starts_at`) testovať bez databázy.
+
+Názvy komponentov tu zámerne nie sú — tie prichádzajú až v G2.
+
+## D. Hlavná rozhodovacia otázka
+
+```
+Rozhodovacia otázka:
+Kde sa má vynucovať invariant BR-02, aby platil aj pri súbežnom potvrdzovaní
+a schvaľovaní — a kto ho vlastní, keď dnes o ňom rozhodujú dve nezávislé
+operácie?
+```
+
+Vychádza z `D-1`, pokračuje otázkou A8 z časti A a má dôsledok na štruktúru
+(kto vlastní), na interakciu (kadiaľ musí prechod prejsť) aj na runtime
+(kde vzniká serializácia).
+
+## E1. Dve alternatívy
+
+**Alternatíva A — jeden vlastník invariantu v aplikácii, serializácia zámkom**
+
+```
++---------------------- Reservation Application -----------------------+
+|                                                                      |
+|  [Confirm]        [Approve]                                          |
+|      \               /                                               |
+|       v             v                                                |
+|   [Reservation Lifecycle]   <- JEDINÝ vlastník BR-02                 |
+|    enter_blocking_state():                                           |
+|      lock(Instrument) -> check overlap -> write state                |
++----------------------------------|-----------------------------------+
+                                   | SELECT ... FOR NO KEY UPDATE
+                                   v
+                          [Reservation DB]
+```
+
+**Alternatíva B — invariant vynútený databázou**
+
+```
++---------------------- Reservation Application -----------------------+
+|  [Confirm]        [Approve]                                          |
+|      \               /                                               |
+|       v             v                                                |
+|   [Reservation Lifecycle]  -> zapíše a zachytí porušenie             |
++----------------------------------|-----------------------------------+
+                                   | INSERT/UPDATE
+                                   v
+                          [Reservation DB]
+                EXCLUDE USING gist (instrument_id WITH =,
+                       tstzrange(starts_at, ends_at) WITH &&)
+                WHERE state IN ('CONFIRMED','PENDING_APPROVAL')
+```
+
+## E2. Porovnanie voči driverom
+
+| Driver / kritérium | Alternatíva A (zámok v službe) | Alternatíva B (DB constraint) |
+| ------------------ | ------------------------------ | ----------------------------- |
+| **D-1** konzistencia `BR-02` | Platí, kým každá cesta zámok vezme. Vynútiteľné testom nad kódom, nie databázou. | Platí vždy, aj pri zápise mimo aplikácie (migrácia, `psql`, iná služba). Silnejšie. |
+| **D-3** živosť žiadosti (`BR-08`) | Podmienka „žiadosť je živá, kým nenastal `starts_at`" sa vyhodnotí v SQL dotaze s aktuálnym časom. Žiadny problém. | **Nedá sa vyjadriť.** Index ani constraint nesmie volať `now()` — nie je immutable. Constraint by blokoval aj vypršané žiadosti, takže `EXPIRED` by sa musel zapisovať dávkovo. Vynúti si vyriešiť `TBD-08` v tom istom kroku. |
+| **D-2** stratený zápis nad jednou rezerváciou | Rieši ten istý mechanizmus — zámok nad riadkom rezervácie. Jedno rozhodnutie pokryje oba drivery. | **Nerieši vôbec.** Constraint hovorí o prekryve dvoch záznamov, nie o dvoch zápisoch do jedného. `REQ-16` by zostal otvorený. |
+| **zmena / ownership** | Invariant je v kóde, čitateľný a testovateľný. Riziko: ďalšia operácia zámok „zabudne" — preto kontrola v L2. | Invariant je v schéme. Riziko: nie je vidieť pri čítaní kódu a chyba sa prejaví až ako `IntegrityError`, ktorý treba preložiť na `OVERLAP`. |
+| **prevádzková zložitosť** | Žiadna nová závislosť. Zámok nad riadkom prístroja serializuje potvrdenia a schválenia **pre ten istý prístroj**; rôzne prístroje bežia súbežne ďalej a vytváranie `DRAFT` (OP-01) neblokuje ani na tom istom prístroji. Stojí na úrovni izolácie `READ COMMITTED`. | Vyžaduje rozšírenie `btree_gist` a migráciu. Migrácie zatiaľ nemáme (`create_all` pri štarte), takže by to bolo druhé architektonické rozhodnutie v tom istom kroku. |
+
+## E3. Ten istý scenár cez obe alternatívy
+
+Scenár: `Confirm Reservation` pre prístroj so schvaľovaním.
+Komplikácia: **dve súbežné potvrdenia prekrývajúcich sa intervalov.**
+
+| Krok / udalosť | Alternatíva A | Alternatíva B |
+| -------------- | ------------- | ------------- |
+| `Confirm` začne (dve vlákna naraz) | obe prejdú kontrolou oprávnenia, stavu, certifikátu | rovnako |
+| vstup do kritickej sekcie | prvé vlákno vezme zámok nad riadkom prístroja, druhé čaká | žiadna kritická sekcia; obe pokračujú |
+| vyhodnotenie prekryvu | prvé nevidí konflikt a zapíše `PENDING_APPROVAL`; druhé sa k dotazu dostane **až po uvoľnení zámku** a konflikt už vidí | obe nevidia konflikt; prvý zápis prejde, druhý počká na commit prvého a zlyhá na constrainte |
+| request skončí | prvé `201`/`200`, druhé `409 OVERLAP` | prvé uspeje, druhé dostane `IntegrityError` z databázy |
+| volajúci dostane | definovaný business kód `OVERLAP` | technickú chybu, ktorú treba preložiť na `OVERLAP` — inak unikne `500` |
+| schválenie príde neskôr | prechod `PENDING_APPROVAL → CONFIRMED` ide cez toho istého vlastníka a znova pod zámkom | constraint drží, ale medzitým vypršaná žiadosť stále blokuje (`BR-08` sa nedá vyjadriť) |
+| výsledok invariantu | najviac jedna blokujúca rezervácia | najviac jedna blokujúca rezervácia, ale aj vypršané žiadosti blokujú |
+
+Obe alternatívy požadované správanie **realizovať vedia**. Líšia sa v tom, čo
+pritom rozbijú: B rieši `D-1` silnejšie, ale nerieši `D-2` a rozbíja `D-3`.
+
+## F. ADR-01
+
+```
+## ADR-01 — Kde sa vynucuje invariant BR-02
+
+Kontext:
+  Baseline v0.2 má jediný invariant nad viacerými záznamami: dve blokujúce
+  rezervácie toho istého prístroja sa nesmú prekrývať (BR-02). Vo v0.1 o ňom
+  rozhodovalo jedno miesto, vo v0.2 dve — confirm aj approve, každé s vlastnou
+  kontrolou a vlastným zápisom. Medzi kontrolou a zápisom je okno; doložené
+  padajúcimi testami REQ-05 a REQ-16 (časť A, A3). Predikát prekryvu navyše
+  existoval v dvoch formách a jedna z nich bola mŕtvy kód.
+
+Drivery:
+  D-1 (BR-02 pri súbehu), D-2 (stratený zápis nad jednou rezerváciou),
+  D-3 (živosť žiadosti podľa BR-08).
+
+Alternatíva A:
+  Jediný vlastník invariantu v aplikácii. Všetky prechody do blokujúceho stavu
+  idú cez enter_blocking_state(); kritickú sekciu serializuje zámok nad riadkom
+  prístroja (SELECT ... FOR NO KEY UPDATE), ktorý si vlastník berie sám, a
+  prechod nad jednou rezerváciou zámok nad jej riadkom (SELECT ... FOR UPDATE).
+
+Alternatíva B:
+  Invariant vynútený databázou — EXCLUDE constraint cez btree_gist nad
+  (instrument_id, tstzrange(starts_at, ends_at)) pre blokujúce stavy.
+
+Rozhodnutie:
+  Prijímame alternatívu A.
+
+Dôvod:
+  Jedno rozhodnutie zatvára D-1 aj D-2 tým istým mechanizmom. Alternatíva B
+  rieši D-1 silnejšie, ale D-2 nerieši vôbec — constraint hovorí o vzťahu dvoch
+  záznamov, nie o dvoch zápisoch do jedného. A rozbíja D-3: podmienka živosti
+  žiadosti závisí od aktuálneho času a constraint ani index now() volať nesmie,
+  takže by blokovali aj vypršané žiadosti. B by si vynútila vyriešiť TBD-08
+  (dávkový zápis EXPIRED) a zaviesť migrácie v tom istom kroku — dve ďalšie
+  rozhodnutia, na ktoré zatiaľ nemáme podklad.
+
+Prijaté negatívne dôsledky:
+  1. Invariant drží dohoda v kóde, nie schéma. Zápis mimo aplikácie — migrácia,
+     psql, budúca druhá služba — ho poruší a databáza to nezachytí.
+  2. Zámok nad riadkom prístroja serializuje VŠETKY potvrdenia a schválenia pre
+     ten istý prístroj. Pri desaťnásobku súbežných rezervácií (future pressure
+     z C01) to je bod, ktorý treba merať. Vytváranie DRAFT neblokuje - preto
+     režim FOR NO KEY UPDATE, nie FOR UPDATE, ktorý by sa zrazil s kontrolou
+     cudzieho kľúča pri vkladaní rezervácie.
+  3. Správnosť závisí od toho, že žiadna budúca operácia zámok neobíde. Preto
+     si zámok berie priamo enter_blocking_state(), nie jeho volajúci, a
+     súčasťou rozhodnutia je automatická kontrola (L2), nie len code review.
+  4. Odstránili sme rules.intervals_overlap(). Prekryv sa dá odteraz testovať
+     iba proti databáze, nie ako čistá funkcia.
+  5. Riešenie stojí na úrovni izolácie READ COMMITTED: dotaz na prekryv musí po
+     čakaní na zámok vidieť zápis, ktorý medzitým commitol sused. V REPEATABLE
+     READ by videl starý snapshot a prešli by obe potvrdenia (overené pokusom).
+     Úroveň preto nastavuje db.py výslovne a stráži ju test.
+
+Rozhodnutie znovu otvoríme, keď:
+  - meranie ukáže, že serializácia na prístroj je úzke hrdlo; alebo
+  - pribudne druhý zapisovateľ do tej istej databázy (druhá služba, import,
+    dávka), lebo vtedy dohoda v kóde prestane stačiť; alebo
+  - aplikácia bude potrebovať vyššiu úroveň izolácie než READ COMMITTED; alebo
+  - vyriešime TBD-08 tak, že EXPIRED sa zapisuje dávkovo — vtedy prestane
+    platiť hlavná námietka proti alternatíve B a constraint sa stane
+    realizovateľným doplnkom, nie náhradou.
+```
+
+## G1. Kontext systému
+
+```
+            [Študent]                      [Vedúci laboratória]
+                |                                   |
+                | create / confirm / cancel,        | approve / reject
+                | check availability                |
+                v                                   v
+          +-------------------------------------------------+
+          |              Reservation System                  |
+          +-------------------------------------------------+
+                :                                   :
+                : identity claims                   : notification request
+                v                                   v
+              [IdP]                        [Notification Service]
+          NEEXISTUJE — identite            NENAPOJENÁ — TBD-03
+          v požiadavke sa dôveruje
+          (TBD-06)
+```
+
+Obe hranice sú nakreslené bodkovane ako nenapojené zámerne: v kóde pre ne nie
+je žiadne volanie (časť A, A6). Kresliť ich ako funkčné by bolo tvrdenie bez
+dokladu. Databáza v kontexte **nie je** — je to vlastné úložisko systému, nie
+externý systém, a patrí do G4.
+
+## G2. TO-BE statická architektúra
+
+```
++---------------------------- Reservation System ---------------------------+
+|                                                                           |
+|  [Reservation API]                                                        |
+|  role: prijme command, otvorí session, odčíta čas, preloží chybu          |
+|     |                  |                    |                    |        |
+|     | create /         | approve /          | check              | now()  |
+|     | confirm /        | reject             | availability       v        |
+|     | cancel           v                    v                  [Clock]    |
+|     |          [Approval Workflow]   [Availability Query]      role:      |
+|     |          role: rozhodnutie     role: reportuje BR-02,    jediný     |
+|     |                vedúceho              nemení stav         zdroj času |
+|     |          owns: zamietnutie            |                  owns:      |
+|     |                (REJECTED)             |                  "teraz"    |
+|     |                  |                    |                             |
+|     |                  | žiada prechod      | predikát BR-02              |
+|     |                  | a vypršanie        | (iba číta)                  |
+|     v                  v                    v                             |
+|  +-------------------------------------------------------------+          |
+|  | [Reservation Lifecycle]                                     |          |
+|  | role: rozhoduje o prechodoch rezervácie                     |          |
+|  | owns: Reservation lifecycle (vrátane vypršania, BR-08)      |          |
+|  | owns: invariant BR-02 a kritická sekcia okolo neho          |          |
+|  +-------------------------------------------------------------+          |
+|          |                                   |                            |
+|          | predikáty pravidiel               | Session: get / select /    |
+|          v                                   v          zámok / commit    |
+|  [Domain Rules]                      [Reservation Store]                  |
+|  role: čisté predikáty,              role: mapovanie na tabuľky,          |
+|        stavy, kódy zamietnutí              engine, session na request     |
+|                                      owns: schéma, úroveň izolácie        |
+|                                           |                               |
+|  [Notification Integration] — plánované   |                               |
+|          :                                |                               |
++----------:--------------------------------|-------------------------------+
+           : (zatiaľ žiadne                 | SQL vrátane
+           v  volanie, TBD-03)              v riadkových zámkov
+  [Notification Service]            [Reservation DB]
+```
+
+Diagram ukazuje hlavnú štruktúru. Úplný zoznam povolených závislostí — vrátane
+tých, ktoré by v obrázku iba krížili čiary:
+
+| Od | K | Rozhranie / interakcia |
+| -- | - | ---------------------- |
+| Reservation API | Reservation Lifecycle | create / confirm / cancel |
+| Reservation API | Approval Workflow | approve / reject |
+| Reservation API | Availability Query | check availability |
+| Reservation API | Clock | `now()` — čas sa odčíta raz na operáciu |
+| Reservation API | Reservation Store | `get_session()` — session na request |
+| Reservation API | Domain Rules | `ErrorCode` → HTTP status |
+| Approval Workflow | Reservation Lifecycle | žiada prechod `PENDING_APPROVAL → CONFIRMED` (`enter_blocking_state()`) a zápis vypršania (`expire_request_if_dead()`) |
+| Availability Query | Reservation Lifecycle | predikát `BR-02`, iba číta |
+| Reservation Lifecycle, Approval Workflow, Availability Query | Domain Rules | predikáty pravidiel, stavy, `DomainError` |
+| Reservation Lifecycle, Approval Workflow, Availability Query | Reservation Store | `Session`: get / select / zámok / commit; entity |
+| Reservation Store | Domain Rules | enumy stavov, kategórií a rolí (import) |
+| Reservation Store | Reservation DB | SQL |
+
+Nič iné povolené nie je. Najmä: do `Approval Workflow` vedie iba API,
+`Reservation Lifecycle` ho nevolá, a `Domain Rules` ani `Clock` nezávisia od
+ničoho.
+
+**Rozhodnutie z ADR-01 je v diagrame viditeľné takto:** `Reservation Lifecycle`
+je jediný prvok s `owns: invariant BR-02` a patrí mu aj kritická sekcia —
+zámok, kontrola a zápis. `Approval Workflow` vlastní rozhodnutie vedúceho, ale
+prechod do blokujúceho stavu si od `Reservation Lifecycle` **žiada**; sám
+zapisuje iba zamietnutie, ktoré nič nealokuje. `Availability Query` `BR-02`
+iba reportuje a nič nevlastní.
+
+Priradenie odpovedností z C2:
+
+| Odpovednosť | Vlastník |
+| ----------- | -------- |
+| O-1 prechody rezervácie vrátane vypršania | Reservation Lifecycle |
+| O-2 invariant `BR-02` a kritická sekcia | Reservation Lifecycle |
+| O-3 predikáty pravidiel | Domain Rules |
+| O-4 dostupnosť | Availability Query |
+| O-5 rozhodnutie o žiadosti | Approval Workflow |
+| O-6 zdroj času | Clock |
+| O-7 notifikácia | Notification Integration *(plánované)* |
+| O-8 perzistencia | Reservation Store |
+
+Kde prvky ležia v kóde:
+
+| Prvok | Kód |
+| ----- | --- |
+| Reservation API | `api/reservations.py`, `main.py` |
+| Reservation Lifecycle | `services/reservations.py` — `create_reservation`, `confirm_reservation`, `cancel_reservation`, `enter_blocking_state`, `expire_request_if_dead`, `_lock_reservation`, `_lock_instrument`, `_overlapping_blocking` |
+| Approval Workflow | `services/reservations.py` — `decide_reservation` |
+| Availability Query | `services/reservations.py` — `check_availability` |
+| Domain Rules | `domain/rules.py`, `domain/states.py`, `errors.py` |
+| Clock | `clock.py` |
+| Reservation Store | `models.py`, `db.py`, `config.py` |
+| Notification Integration | — *(plánované)* |
+
+Tri prvky sú **funkcie jedného modulu**, nie samostatné súbory (delta J,
+`KEEP`). Spoločné kontroly predpokladov `_require_user`, `_require_instrument`
+a `_require_authorized` smie volať ktorýkoľvek z nich. To isté priradenie je
+zapísané v `tests/test_architecture_conformance.py` (`ELEMENTS`); test padne,
+keď v module pribudne funkcia bez prvku.
+
+## G3. Vlastníctvo prechodov v statecharte
+
+| Prechod | Owner rozhodnutia | Kto smie prechod iba vyžiadať |
+| ------- | ----------------- | ----------------------------- |
+| `DRAFT → CONFIRMED` | Reservation Lifecycle | Reservation API (na podnet študenta alebo vedúceho) |
+| `DRAFT → PENDING_APPROVAL` | Reservation Lifecycle | Reservation API; o tom, že sa ide touto vetvou, rozhoduje `Instrument.requires_approval` (`REQ-10`) |
+| `PENDING_APPROVAL → CONFIRMED` | **Reservation Lifecycle** (vstup do blokujúceho stavu) | **Approval Workflow** po kladnom rozhodnutí vedúceho |
+| `PENDING_APPROVAL → REJECTED` | Approval Workflow | Reservation API (vedúci) |
+| `PENDING_APPROVAL → EXPIRED` | **Reservation Lifecycle** (`expire_request_if_dead()`) | výslovne nikto — vyvolá ho plynutie času (`BR-08`); zapíše sa pri najbližšom zrušení (Reservation Lifecycle) alebo rozhodnutí (Approval Workflow), ktoré na žiadosť smeruje (`TBD-08`) |
+| `DRAFT → CANCELLED`, `CONFIRMED → CANCELLED`, `PENDING_APPROVAL → CANCELLED` | Reservation Lifecycle | Reservation API (vlastník alebo vedúci) |
+
+Rozdiel medzi tretím a štvrtým riadkom je celý obsah ADR-01. Zamietnutie je
+koncový stav, ktorý nič nealokuje, preto ho `Approval Workflow` rozhodne sám.
+Schválenie **alokuje prístroj**, takže ho musí vykonať vlastník invariantu.
+
+Vypršanie (piaty riadok) patrí lifecycle, nie schvaľovaniu: nie je to
+rozhodnutie vedúceho a tá istá podmienka živosti určuje, či žiadosť blokuje
+(C2). Prvý návrh ho dával `Approval Workflow` — v kóde ho však zapisovalo aj
+zrušenie, teda lifecycle. Rozpor našlo review PR #7, viď I.
+
+## G4. Runtime / deployment
+
+```
+[Reservation Application — jeden proces, uvicorn]
+obsahuje:
+  - Reservation API
+  - Reservation Lifecycle      <- vlastník BR-02
+  - Approval Workflow
+  - Availability Query
+  - Domain Rules
+  - Clock
+  - Reservation Store
+
+        | SQL, riadkové zámky (SELECT ... FOR UPDATE / FOR NO KEY UPDATE),
+        v úroveň izolácie READ COMMITTED
+  [PostgreSQL 16 — kontajner db z docker-compose.yml, port 5433]
+
+  [Notification Service]  - plánované, žiadne volanie (TBD-03)
+  [IdP]                   - neexistuje (TBD-06)
+```
+
+Jeden proces, jedna databáza. **Serializácia z ADR-01 nevzniká v procese, ale
+v databáze** — preto rozhodnutie platí aj vtedy, keď procesov bude viac.
+Keby bol zámok v pamäti procesu, druhá inštancia aplikácie by ho obišla.
+
+## H1. Návrhový sekvenčný diagram — Confirm Reservation
+
+```mermaid
+sequenceDiagram
+    actor Student
+    participant API as Reservation API
+    participant Clock
+    participant Life as Reservation Lifecycle
+    participant Rules as Domain Rules
+    participant Store as Reservation Store
+    participant DB as Reservation DB
+
+    Student->>API: POST /reservations/{id}/confirm
+    API->>Store: get_session()
+    API->>Clock: now()
+    API->>Life: confirm_reservation(session, id, requested_by, now)
+
+    Life->>Store: načítaj rezerváciu so zámkom
+    Store->>DB: SELECT ... FOR UPDATE
+    DB-->>Life: Reservation(DRAFT)
+    Note over Life: predpoklady v poradí diagramu aktivít 3.3 —<br/>BR-06, stav DRAFT, REQ-06, BR-05
+
+    Life->>Rules: certification_covers() — BR-04
+    Rules-->>Life: certifikát vlastníka platí
+
+    Life->>Life: enter_blocking_state(CONFIRMED / PENDING_APPROVAL)
+    Life->>Store: zamkni riadok prístroja
+    Store->>DB: SELECT ... FOR NO KEY UPDATE
+    Note over Life,DB: od tejto chvíle je BR-02 pre tento<br/>prístroj serializované (ADR-01)
+
+    Life->>Store: nájdi prekrývajúce blokujúce rezervácie
+    Store->>DB: SELECT ... WHERE state IN (...) AND overlap
+
+    alt žiadny konflikt
+        DB-->>Life: prázdny výsledok
+        Life->>Life: reservation.state = cieľový stav
+        Life->>Store: commit
+        Store->>DB: COMMIT (uvoľní oba zámky)
+        Life-->>API: Reservation
+        API-->>Student: 200 OK + stav
+    else konflikt (BR-02)
+        DB-->>Life: kolidujúca rezervácia
+        Life-->>API: DomainError(OVERLAP)
+        API-->>Student: 409 {"code": "OVERLAP"}
+        Note over Life,DB: stav zostáva DRAFT, zámky uvoľní<br/>rollback pri zatvorení session
+    end
+```
+
+Zámok nad prístrojom, kontrola prekryvu a zápis stavu sú vnútri
+`enter_blocking_state()` — zámok si berie vlastník invariantu, nie operácia,
+ktorá ho volá.
+
+Pri schvaľovaní je sekvencia rovnaká s tým rozdielom, že
+`enter_blocking_state()` volá `Approval Workflow` (`decide_reservation`), keď
+predtým overil `BR-07` a živosť žiadosti — prechod do blokujúceho stavu ide
+cez toho istého vlastníka.
+
+## H2. Návrhový triedny diagram
+
+```mermaid
+classDiagram
+    class ReservationApi {
+        <<module>>
+        +confirm_reservation(id, actor) Response
+        +cancel_reservation(id, actor) Response
+        +approve_reservation(id, actor) Response
+        +reject_reservation(id, actor) Response
+    }
+    class ReservationLifecycle {
+        <<module>>
+        +confirm_reservation(session, id, by, now) Reservation
+        +cancel_reservation(session, id, by, now) CancelResult
+        +enter_blocking_state(session, reservation, target, now)
+        +expire_request_if_dead(session, reservation, now)
+        -_lock_reservation(session, id) Reservation
+        -_lock_instrument(session, id) Instrument
+        -_overlapping_blocking(...) list
+    }
+    class ApprovalWorkflow {
+        <<module>>
+        +decide_reservation(session, id, by, approve, now) Reservation
+    }
+    class DomainRules {
+        <<module>>
+        +certification_covers(valid_until, starts_at) bool
+        +may_cancel_confirmed(starts_at, now) bool
+        +approval_request_is_alive(starts_at, now) bool
+        +is_interval_valid(starts_at, ends_at) bool
+    }
+    class Clock {
+        <<module>>
+        +now() datetime
+    }
+    class ReservationStore {
+        <<module>>
+        +get_session() Session
+    }
+    class Session {
+        <<interface>>
+        +get(entity, id, with_for_update) entity
+        +scalars(select) list
+        +commit()
+    }
+    class Reservation {
+        +UUID id
+        +ReservationState state
+        +datetime starts_at
+        +datetime ends_at
+    }
+    class Instrument {
+        +bool is_active
+        +bool requires_approval
+    }
+    class DomainError {
+        +ErrorCode code
+        +str message
+    }
+
+    ReservationApi ..> ReservationLifecycle : confirm / cancel
+    ReservationApi ..> ApprovalWorkflow : approve / reject
+    ReservationApi ..> Clock : now()
+    ReservationApi ..> ReservationStore : get_session()
+    ReservationApi ..> DomainError : → HTTP status
+    ApprovalWorkflow ..> ReservationLifecycle : enter_blocking_state(), expire_request_if_dead()
+    ReservationStore ..> Session : vytvára na request
+    ReservationLifecycle ..> Session : get / scalars / commit
+    ReservationLifecycle ..> DomainRules
+    ReservationLifecycle ..> Reservation : mení state
+    ReservationLifecycle ..> Instrument : zamyká riadok
+    ReservationLifecycle ..> DomainError
+    Instrument "1" --> "0..*" Reservation
+```
+
+Každá lifeline z H1 má tu štrukturálneho vlastníka: `Reservation Store`
+z H1 je `ReservationStore` so `Session`, cez ktorú lifecycle číta, zamyká
+a commituje; `Reservation DB` je externý runtime prvok (G4), nie trieda.
+`enter_blocking_state()` je jediná operácia, ktorá priraďuje blokujúci stav —
+a `ApprovalWorkflow` k nej vedie závislosť, nie vlastný zápis.
+
+## I. Cross-view kontrola
+
+| Kontrola | Výsledok |
+| -------- | -------- |
+| C02 ↔ G2 | **OK.** Všetkých päť operácií má v G2 vlastníka; `BR-01`–`BR-08` sú pokryté `Domain Rules` a `Reservation Lifecycle`. |
+| C2 ↔ G2 | **OK po oprave.** Prvý návrh dával `Approval Workflow` vlastníctvo prechodu `PENDING_APPROVAL → CONFIRMED`, čím by invariant mal dvoch vlastníkov — presne to, čo ADR-01 ruší. Opravené v G2 aj G3: Approval Workflow prechod *žiada*. Pri review ešte R-2 a R-3 nižšie. |
+| G2 ↔ H1 | **OK po oprave (R-4).** Sekvencia používa iba závislosti zo zoznamu v G2. `Reservation Lifecycle` nevolá `Reservation API` späť. |
+| H1 ↔ H2 | **OK po oprave (R-1).** Každá lifeline a správa z H1 má v H2 vlastníka. |
+| statechart ↔ G3/H1 | **OK po oprave.** Statechart v `diagrams.md` nerozlišuje, kto prechod rozhoduje a kto žiada — G3 to dopĺňa, statechart sa nemení (baseline v0.2 zostáva). Pri review ešte R-3. |
+| G2 ↔ G4 | **OK.** Sedem logických prvkov beží v jednom procese; `Notification Integration` nie je ani v jednom, lebo neexistuje. |
+| ADR ↔ G2/G4 | **OK po oprave (R-6).** `owns: invariant BR-02` je v G2 práve raz; v G4 je vidieť, že serializácia vzniká v databáze, nie v procese. |
+
+Dva rozpory nájdené pri tejto kontrole sú opravené **v diagramoch, pred zmenou
+kódu** — nie v kóde.
+
+### Doplnenie po review PR #7
+
+Prvá kontrola šesť rozporov prehliadla. Našlo ich až review, teda **po** zmene
+kódu — poradie, ktorému sa mala kontrola vyhnúť, a preto ich tu nechávame
+viditeľné namiesto toho, aby sme prepísali výsledky vyššie.
+
+| # | Kontrola | Rozpor | Oprava |
+| - | -------- | ------ | ------ |
+| R-1 | H1 ↔ H2 | Lifeline `Reservation Store` nemala v H2 žiadnu triedu, hoci kontrola hlásila OK. | H2 doplnený o `ReservationStore` a `Session`. |
+| R-2 | C2 ↔ G2 ↔ kód | G2 pripisoval úložisku „zámky a hranicu transakcie". Zámky sú však kritická sekcia vlastníka invariantu a commit robí operácia. | Opravené v C2 (`O-2`, `O-8`) a G2; kód sa nemenil, v delte `KEEP`. |
+| R-3 | G2 ↔ G3 ↔ kód | G2 dával `Approval Workflow` stavy `PENDING_APPROVAL` a `EXPIRED`. Do prvého však podľa G3 vstupuje lifecycle a druhý zapisovalo aj zrušenie — dvaja vlastníci. | `Approval Workflow` vlastní rozhodnutie vedúceho, vypršanie patrí lifecycle (C2, G2, G3); `EXPIRED` dostal jedno miesto zápisu, v delte `CHANGE`. |
+| R-4 | G2 ↔ H1 | H1 používal `Clock` a session bez šípky v G2; G2 viedol `approve / reject` do lifecycle a `Domain Rules` do úložiska; H1 kreslil certifikát pred zámkom prístroja a kontroly oprávnenia, stavu a času ako volania `Domain Rules`, hoci ich robí lifecycle. | G2 prekreslený a doplnený o úplný zoznam závislostí, H1 zoradený podľa kódu. |
+| R-5 | G1 | Databáza bola v kontexte ako externý systém. | Presunutá do G4; v kontexte ostali IdP a Notification Service. |
+| R-6 | ADR ↔ G2/G4 ↔ kód | Zámok nad prístrojom bol „predpokladom volajúceho", nie vecou vlastníka invariantu; režim zámku a úroveň izolácie, na ktorej riešenie stojí, neboli nikde zapísané. | Zámok si berie `enter_blocking_state()` sám; ADR-01 doplnené o režim zámku a dôsledok č. 5; v delte dva riadky `CHANGE`. |
+
+## J. AS-IS → TO-BE delta
+
+| Oblasť | AS-IS (časť A) | TO-BE (G2/H2) | Akcia |
+| ------ | --------------- | ------------- | ----- |
+| rozhodnutie o `BR-02` | dve miesta: `confirm_reservation():263` a `decide_reservation():436` | jedno: `enter_blocking_state()` | `CHANGE` |
+| kritická sekcia | žiadna — kontrola a zápis bez ochrany | zámok nad riadkom prístroja pred kontrolou prekryvu; berie si ho sám vlastník invariantu | `CHANGE` |
+| prechod nad jednou rezerváciou | `session.get()` bez zámku, `REQ-16` otvorený | `_lock_reservation()` vo všetkých troch meniacich operáciách | `CHANGE` |
+| predikát prekryvu | dve formy, `rules.intervals_overlap()` mŕtva a komentár o nej klamal | jedna forma v SQL | `CHANGE` |
+| zápis `EXPIRED` | dve kópie: `cancel_reservation():323` a `decide_reservation():395` | jedno miesto: `expire_request_if_dead()` v lifecycle | `CHANGE` |
+| úroveň izolácie | predvolená hodnota servera, nikde nezapísaná | `READ COMMITTED` nastavená výslovne v `db.py` | `CHANGE` |
+| testy súbehu | `xfail(strict=True)`, bariéra vnútri kritickej sekcie; súbeh nad OP-05 bez testu | bariéra na vstupe operácie, bez `xfail`; doplnený súbeh zrušenia so schválením a dvoch rozhodnutí | `CHANGE` |
+| ochrana vlastníctva invariantu | žiadna | opakovateľná statická kontrola | `CHANGE` |
+| `Reservation` ako dátový model bez metód | prechod robí servisná funkcia | rovnako — vlastník je modul, nie entita | `KEEP` |
+| `TimeInterval` ako value object | dva stĺpce `starts_at`, `ends_at` | v doménovom modeli value object | `KEEP` |
+| čas ako závislosť | `clock.now()` v API, odovzdáva sa službám | rovnako | `KEEP` |
+| perzistencia | jedna cesta do DB cez `Session`/engine | rovnako | `KEEP` |
+| dotazy a commit | skladá a robí ich servisná vrstva, bez repozitára (časť A, A6) | rovnako, zámky pribudli v tej istej vrstve — `Reservation Store` je mapovanie a session, nie repozitár; ADR-01 repozitár nevyžaduje a bolo by to druhé rozhodnutie | `KEEP` |
+| logické prvky a súbory | jeden modul `services/reservations.py` | `Reservation Lifecycle`, `Approval Workflow` a `Availability Query` sú funkcie toho istého modulu; priradenie stráži test | `KEEP` |
+| smer závislostí | neoverený | `Approval Workflow → Reservation Lifecycle`, nikdy opačne | `VERIFY` |
+
+Notifikácie (`D-4`, `TBD-03`) a dávkové dočisťovanie `EXPIRED` (`D-3`,
+`TBD-08`) v tejto delte **nie sú**. ADR-01 ich nerieši a implementovať ich bez
+rozhodnutia by bolo presne to, pred čím varuje sekcia K zadania.
