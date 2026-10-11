@@ -680,5 +680,5 @@ konštruktorom — `setattr()` alebo hromadný `UPDATE` cez SQL.
 
 **Commit/tag:** vetva `feature/c03-architecture` (PR #7) — návrh `03cfaab`,
 implementácia ADR-01 `611e7f4`, evidence `b77065c`, opravy po review
-v nasledujúcom commite tej istej vetvy. Tag `c03-architecture` sa nastaví na
+`39b6c00`. Tag `c03-architecture` sa nastaví na
 merge commit po zlúčení do `main`.
