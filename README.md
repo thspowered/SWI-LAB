@@ -158,8 +158,8 @@ operácií. Architektúru tejto cesty rieši až C03.
 - [x] evidence prepája špecifikáciu s bežiacim chovaním
 - [x] aspoň jeden konkrétny architektonický driver pripravený pre C03
 
-Tri doložené medzery (REQ-05 pri potvrdení, REQ-05 pri schvaľovaní, REQ-16)
-sú zámerne nesplnené a sú vstupom pre C03.
+Tri doložené medzery (REQ-05 v oboch vetvách REQ-10 a REQ-16) boli v C02
+zámerne nesplnené a boli vstupom pre C03 — tam sú zatvorené, viď nižšie.
 
 ## C03 Definition of Done
 
@@ -172,11 +172,11 @@ sú zámerne nesplnené a sú vstupom pre C03.
 - [x] kontext, statická architektúra, ownership prechodov a runtime sú konzistentné
 - [x] scenár realizovaný návrhovým sekvenčným diagramom
 - [x] návrhový triedny diagram podporuje tú istú realizáciu
-- [x] cross-view kontrola vykonaná pred zmenou kódu (našla dva rozpory)
+- [x] cross-view kontrola vykonaná pred zmenou kódu (našla dva rozpory; review PR #7 ďalších šesť)
 - [x] AS-IS → TO-BE delta s `CHANGE` / `KEEP` / `VERIFY`
-- [x] behaviour verification z C02 po zmene prechádza — `92 passed`
+- [x] behaviour verification z C02 po zmene prechádza — `102 passed`
 - [x] opakovateľná kontrola chráni architektonické pravidlo z ADR-01
-- [x] evidence a commit zaznamenané
+- [x] evidence a commity zaznamenané; tag `c03-architecture` po zlúčení
 
 Tri medzery prenesené z C02 (`REQ-05` v oboch vetvách, `REQ-16`) sú
 **zatvorené** — testy už nie sú `xfail`.

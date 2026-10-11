@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
-from swilab.domain.states import BLOCKING_STATES, ReservationState
+from swilab.domain.states import BLOCKING_STATES, ReservationState, UserRole
 from swilab.errors import DomainError
 from swilab.models import Reservation
 from swilab.services import reservations as service
@@ -64,6 +64,31 @@ def start_barrier(monkeypatch) -> threading.Barrier:
 
         monkeypatch.setattr(service, name, wrapped)
     return barrier
+
+
+def test_engine_aplikacie_bezi_v_read_committed():
+    """Predpoklad ADR-01. V REPEATABLE READ by dotaz na prekryv po cakani
+    na zamok videl stary snapshot a presli by obe potvrdenia - overene
+    pokusom, viz docs/evidence-and-evolution.md."""
+    from swilab.db import engine as app_engine
+
+    with app_engine.connect() as connection:
+        assert connection.get_isolation_level() == "READ COMMITTED"
+
+
+def _call(new_session, operation: str, **kwargs):
+    """Operacia sluzby vo vlastnej session - ako samostatny request."""
+
+    def _run():
+        with new_session() as own_session:
+            getattr(service, operation)(own_session, now=datetime.now(UTC), **kwargs)
+
+    return _run
+
+
+def _state_of(new_session, reservation_id) -> ReservationState:
+    with new_session() as verify:
+        return verify.get(Reservation, reservation_id).state
 
 
 def _run_in_parallel(first, second) -> list[str]:
@@ -181,65 +206,227 @@ def test_concurrent_conflicting_confirmations(
         )
 
 
+@pytest.mark.parametrize("requires_approval", [False, True])
 def test_concurrent_cancel_and_confirm_on_same_reservation(
     session, new_session, make_instrument, make_user, make_certification,
-    make_reservation, start_barrier,
+    make_reservation, start_barrier, requires_approval,
 ):
-    """REQ-16: rezervacia opusti stav DRAFT najviac raz.
+    """REQ-16: zrusenie nikdy nevrati uspech nad rezervaciou, ktora potom
+    blokuje pristroj.
 
     Toto NIE JE REQ-05: tam ide o okno medzi kontrolou PREKRYVU a zapisom
     nad dvoma roznymi rezervaciami, tu o okno medzi kontrolou ZDROJOVEHO
     STAVU a zapisom nad JEDNOU - a tyka sa aj zrusenia, kde REQ-05
     nefiguruje vobec. Zarucuje to zamok nad riadkom rezervacie (ADR-01).
 
-    Po serializacii su mozne dve legalne historie:
+    Termin je daleko (24 h), takze podla OP-04 su po serializacii mozne
+    dve legalne historie:
       confirm, potom cancel  -> obe uspesne, koncovy stav CANCELLED
+                                (zrusenie sa posudi podla noveho stavu)
       cancel, potom confirm  -> confirm zamietnuty (INVALID_STATE)
-    Zakazana je ta tretia: zrusenie vrati uspech a rezervacia je pritom
-    potvrdena. To je stratený zapis, ktory REQ-16 zakazuje.
+    Zakazana je ta tretia: zrusenie vrati uspech a rezervacia pritom
+    blokuje pristroj. Variant, v ktorom smie uspiet NAJVIAC JEDNA
+    operacia, je test_at_most_one_operation_leaves_the_source_state.
     """
     now = datetime.now(UTC)
     starts_at = now + 24 * HOUR
     ends_at = starts_at + HOUR
-
-    instrument = make_instrument()
     owner = make_user()
-    make_certification(owner, instrument.category, ends_at + 24 * HOUR)
-    reservation = make_reservation(instrument, owner, starts_at, ends_at)
-    reservation_id = reservation.id
 
-    def confirm():
-        with new_session() as own_session:
-            service.confirm_reservation(
-                own_session, reservation_id=reservation_id,
-                requested_by=owner.id, now=datetime.now(UTC),
+    for round_index in range(ROUNDS):
+        # Novy pristroj v kazdom kole: vitaz minuleho kola by inak blokoval.
+        instrument = make_instrument(requires_approval=requires_approval)
+        if round_index == 0:
+            make_certification(owner, instrument.category, ends_at + 24 * HOUR)
+        reservation_id = make_reservation(instrument, owner, starts_at, ends_at).id
+
+        confirm_outcome, cancel_outcome = _run_in_parallel(
+            _call(new_session, "confirm_reservation",
+                  reservation_id=reservation_id, requested_by=owner.id),
+            _call(new_session, "cancel_reservation",
+                  reservation_id=reservation_id, requested_by=owner.id),
+        )
+        final_state = _state_of(new_session, reservation_id)
+
+        # Poistka proti vakuovemu prechodu: oba vysledky musia byt business
+        # vysledky, nie nazvy vynimiek.
+        assert confirm_outcome in ("OK", "INVALID_STATE"), (round_index, confirm_outcome)
+        assert cancel_outcome == "OK", (round_index, cancel_outcome)
+
+        # Jadro REQ-16: ak zrusenie vratilo uspech, rezervacia nesmie
+        # blokovat - presne to bol pozorovatelny dosledok strateneho zapisu.
+        assert final_state is ReservationState.CANCELLED, (
+            f"kolo {round_index}: zrusenie vratilo uspech, ale koncovy stav je "
+            f"{final_state} - pouzivatel si mysli, ze zrusil rezervaciu, ktora "
+            f"blokuje pristroj (confirm={confirm_outcome}, cancel={cancel_outcome})"
+        )
+
+
+@pytest.mark.parametrize(
+    ("rival", "source_state"),
+    [
+        ("confirm", ReservationState.DRAFT),
+        ("approve", ReservationState.PENDING_APPROVAL),
+    ],
+)
+def test_at_most_one_operation_leaves_the_source_state(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, start_barrier, rival, source_state,
+):
+    """REQ-16 doslova: ked sa zrusenie stretne s potvrdenim alebo so
+    schvalenim tej istej rezervacie, uspeje NAJVIAC JEDNO a druhe skonci
+    zamietnutim podla uz zmeneneho zdrojoveho stavu.
+
+    Termin je o 30 minut, teda vnutri lehoty BR-03. Preto plati "najviac
+    jedno" pri OBOCH poradiach:
+      vyhra confirm/approve -> CONFIRMED, cancel zamietnuty TOO_LATE
+      vyhra cancel          -> CANCELLED, confirm/approve INVALID_STATE
+    Strateny zapis sa prejavi ako ['OK', 'OK'] pri kazdom poradi zapisov,
+    takze tento test ho zachyti aj tam, kde ho test vyssie neuvidi
+    (confirm prepisany zrusenim konci v CANCELLED rovnako ako legalna
+    historia).
+
+    Vetva "approve" doklada sucasne druhu polovicu REQ-16 - subeh
+    zrusenia so SCHVALENIM (OP-05), ktory v C02 test nemal.
+    """
+    now = datetime.now(UTC)
+    starts_at = now + timedelta(minutes=30)
+    ends_at = starts_at + HOUR
+    owner = make_user()
+    supervisor = make_user(role=UserRole.SUPERVISOR)
+
+    for round_index in range(ROUNDS):
+        instrument = make_instrument(
+            requires_approval=source_state is ReservationState.PENDING_APPROVAL
+        )
+        if round_index == 0:
+            make_certification(owner, instrument.category, ends_at + 24 * HOUR)
+        reservation_id = make_reservation(
+            instrument, owner, starts_at, ends_at, state=source_state
+        ).id
+
+        if rival == "confirm":
+            rival_call = _call(new_session, "confirm_reservation",
+                               reservation_id=reservation_id, requested_by=owner.id)
+        else:
+            rival_call = _call(new_session, "decide_reservation",
+                               reservation_id=reservation_id,
+                               requested_by=supervisor.id, approve=True)
+
+        rival_outcome, cancel_outcome = _run_in_parallel(
+            rival_call,
+            _call(new_session, "cancel_reservation",
+                  reservation_id=reservation_id, requested_by=owner.id),
+        )
+        final_state = _state_of(new_session, reservation_id)
+
+        legal = {
+            ("OK", "TOO_LATE"): ReservationState.CONFIRMED,
+            ("INVALID_STATE", "OK"): ReservationState.CANCELLED,
+        }
+        assert (rival_outcome, cancel_outcome) in legal, (
+            f"kolo {round_index}: {rival}={rival_outcome}, cancel={cancel_outcome} - "
+            f"REQ-16 dovoluje uspech najviac jednej operacie"
+        )
+        assert final_state is legal[(rival_outcome, cancel_outcome)], (
+            f"kolo {round_index}: vysledky ({rival}={rival_outcome}, "
+            f"cancel={cancel_outcome}) nesedia s koncovym stavom {final_state}"
+        )
+
+
+def test_concurrent_approve_and_reject_on_same_request(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, start_barrier,
+):
+    """REQ-16 nad OP-05: dvaja veduci rozhodnu o tej istej ziadosti naraz
+    opacne. Ziadost opusti PENDING_APPROVAL prave raz - druhe rozhodnutie
+    vidi uz zmeneny stav a je zamietnute. Bez zamku nad riadkom rezervacie
+    by uspeli obe a platil by ten zapis, ktory prisiel neskor.
+    """
+    now = datetime.now(UTC)
+    starts_at = now + 24 * HOUR
+    ends_at = starts_at + HOUR
+    owner = make_user()
+    approving = make_user(role=UserRole.SUPERVISOR)
+    rejecting = make_user(role=UserRole.SUPERVISOR)
+
+    for round_index in range(ROUNDS):
+        instrument = make_instrument(requires_approval=True)
+        if round_index == 0:
+            make_certification(owner, instrument.category, ends_at + 24 * HOUR)
+        reservation_id = make_reservation(
+            instrument, owner, starts_at, ends_at,
+            state=ReservationState.PENDING_APPROVAL,
+        ).id
+
+        approve_outcome, reject_outcome = _run_in_parallel(
+            _call(new_session, "decide_reservation", reservation_id=reservation_id,
+                  requested_by=approving.id, approve=True),
+            _call(new_session, "decide_reservation", reservation_id=reservation_id,
+                  requested_by=rejecting.id, approve=False),
+        )
+        final_state = _state_of(new_session, reservation_id)
+
+        legal = {
+            ("OK", "INVALID_STATE"): ReservationState.CONFIRMED,
+            ("INVALID_STATE", "OK"): ReservationState.REJECTED,
+        }
+        assert (approve_outcome, reject_outcome) in legal, (
+            f"kolo {round_index}: approve={approve_outcome}, reject={reject_outcome} - "
+            f"o ziadosti smie rozhodnut prave jedno z dvoch rozhodnuti"
+        )
+        assert final_state is legal[(approve_outcome, reject_outcome)], (
+            f"kolo {round_index}: koncovy stav {final_state} nesedi s vitazom "
+            f"(approve={approve_outcome}, reject={reject_outcome})"
+        )
+
+
+def test_concurrent_approvals_of_colliding_requests(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, start_barrier,
+):
+    """Priklad overenia OP-05: dve subezne schvalenia kolidujucich ziadosti
+    -> najviac jedna CONFIRMED (REQ-05), ostatne zostanu PENDING_APPROVAL.
+
+    Dve zive prekryvajuce sa ziadosti cez operacie vzniknut nemozu - BR-02
+    druhu zamietne uz pri potvrdeni. Zakladame ich preto priamo v databaze,
+    rovnako ako test_approval_rechecks_overlap. Kazde schvalenie vidi tu
+    druhu ziadost ako blokujucu, takze test NEROZLISI kod so zamkom od kodu
+    bez neho; doklada, ze priklad zo specifikacie plati a ze dve schvalenia
+    nad tym istym pristrojom skoncia business vysledkom, nie zaseknutim.
+    """
+    now = datetime.now(UTC)
+    starts_at = now + 24 * HOUR
+    ends_at = starts_at + HOUR
+    first_owner, second_owner = make_user(), make_user()
+    supervisor = make_user(role=UserRole.SUPERVISOR)
+
+    for round_index in range(ROUNDS):
+        instrument = make_instrument(requires_approval=True)
+        if round_index == 0:
+            for owner in (first_owner, second_owner):
+                make_certification(owner, instrument.category, ends_at + 24 * HOUR)
+        ids = [
+            make_reservation(
+                instrument, owner, starts_at, ends_at,
+                state=ReservationState.PENDING_APPROVAL,
+            ).id
+            for owner in (first_owner, second_owner)
+        ]
+
+        outcomes = _run_in_parallel(*(
+            _call(new_session, "decide_reservation", reservation_id=reservation_id,
+                  requested_by=supervisor.id, approve=True)
+            for reservation_id in ids
+        ))
+        states = [_state_of(new_session, reservation_id) for reservation_id in ids]
+
+        assert set(outcomes) <= {"OK", "OVERLAP"}, (round_index, outcomes)
+        assert states.count(ReservationState.CONFIRMED) <= 1, (round_index, states)
+        for outcome, state in zip(outcomes, states):
+            expected = (
+                ReservationState.CONFIRMED
+                if outcome == "OK"
+                else ReservationState.PENDING_APPROVAL
             )
-
-    def cancel():
-        with new_session() as own_session:
-            service.cancel_reservation(
-                own_session, reservation_id=reservation_id,
-                requested_by=owner.id, now=datetime.now(UTC),
-            )
-
-    confirm_outcome, cancel_outcome = _run_in_parallel(confirm, cancel)
-
-    with new_session() as verify:
-        final_state = verify.get(Reservation, reservation_id).state
-
-    # Poistka proti vakuovemu prechodu: oba vysledky musia byt business
-    # vysledky, nie nazvy vynimiek.
-    assert confirm_outcome in ("OK", "INVALID_STATE"), confirm_outcome
-    assert cancel_outcome == "OK", cancel_outcome
-
-    # Jadro REQ-16: ak zrusenie vratilo uspech, rezervacia nesmie zostat
-    # potvrdena - presne to bol pozorovatelny dosledok strateneho zapisu.
-    assert final_state is ReservationState.CANCELLED, (
-        f"zrusenie vratilo uspech, ale koncovy stav je {final_state} - "
-        f"pouzivatel si mysli, ze zrusil rezervaciu, ktora blokuje pristroj "
-        f"(confirm={confirm_outcome}, cancel={cancel_outcome})"
-    )
-
-    # Rezervacia opustila DRAFT prave raz: ak confirm uspel, bolo to
-    # DRAFT->CONFIRMED->CANCELLED; ak nie, rovno DRAFT->CANCELLED.
-    assert final_state is not ReservationState.DRAFT
+            assert state is expected, (round_index, outcomes, states)

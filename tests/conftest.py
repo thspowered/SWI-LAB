@@ -15,7 +15,9 @@ DATABASE_URL = os.environ.get(
 def engine():
     """Realny Postgres. Ziadne SQLite, ziadny in-memory fake -
     spike ma overit skutocnu databazu."""
-    eng = create_engine(DATABASE_URL, future=True)
+    # Rovnaka uroven izolacie ako v swilab/db.py - je to predpoklad ADR-01,
+    # takze testy ju nesmu zdedit nahodne od servera.
+    eng = create_engine(DATABASE_URL, future=True, isolation_level="READ COMMITTED")
     # drop_all + create_all, nie iba create_all: v0.2 pridala hodnoty do
     # enum typu reservation_state a stlpec instruments.requires_approval.
     # create_all existujucu tabulku ani typ nezmeni - bez migracii je cista
