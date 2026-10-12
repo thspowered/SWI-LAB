@@ -181,11 +181,28 @@ zámerne nesplnené a boli vstupom pre C03 — tam sú zatvorené, viď nižšie
 Tri medzery prenesené z C02 (`REQ-05` v oboch vetvách, `REQ-16`) sú
 **zatvorené** — testy už nie sú `xfail`.
 
+## C05 Definition of Done
+
+- [x] jedna architecture responsibility / unit — `Reservation Lifecycle`
+- [x] detailed responsibilities (L-1..L-7)
+- [x] ownership — návrhové prvky a rozhodnutia DD-1..DD-7
+- [x] významné interface / contract — Transition Policy, `enter_blocking_state()`
+- [x] focused structural UML view
+- [x] detailed sequence — `Cancel Reservation`
+- [x] významné methods / operations
+- [x] algorithm / decision logic — rozhodovacie tabuľky zrušenia, potvrdenia a vypršania
+- [x] minimálne 5 testov odvodených z DD — 67 unit, 32 component, 4 statické
+- [x] testy spustené — `205 passed`; 17 vložených chýb, každú zachytí aspoň jeden test
+- [x] DD porovnané s implementáciou — 2 rozhodnutia si vyžiadali zmenu kódu, 4 formulácie opravu návrhu
+- [x] commity v poradí návrh → testy → implementácia → evidence; tag `c05-detailed-design` po zlúčení
+
+Správanie baseline v0.2 sa v C05 nemenilo — mení sa vnútro jednej jednotky.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
 - [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
-- [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02
+- [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia, architektúra C03 (ADR-01), detailed design C05
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03 a C05

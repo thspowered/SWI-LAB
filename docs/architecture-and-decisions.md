@@ -975,6 +975,11 @@ Oddiel je napísaný **pred zmenou kódu**, nad stavom `main` po C03 (commit
 návrhu s implementáciou je v `evidence-and-evolution.md`, oddiel
 „C05 — DD Verification Evidence".
 
+Po porovnaní sa v tomto oddiele zmenili **štyri formulácie** — všetky sú
+vymenované v evidence, v tabuľke „Design ↔ implementation mismatch".
+Rozhodovacie tabuľky ani predpoklady, postconditions a zlyhania kontraktov sa
+nemenili; pôvodné znenie je v commite `9e066e6`.
+
 ## C05.1 Vybraná jednotka
 
 | Položka | Hodnota |
@@ -1047,7 +1052,7 @@ Na tieto rozhodnutia sa odkazujú testy a porovnanie s kódom.
 | # | Rozhodnutie | Odkiaľ |
 | - | ----------- | ------ |
 | **DD-1** | Rozhodnutie o prechode je oddelené od jeho vykonania. Rozhoduje čistá `Transition Policy`; operácia iba načíta, opýta sa, vykoná a commitne. | *(nové)* |
-| **DD-2** | Politika je **totálna**: pre každý stav vráti rozhodnutie. Stav, ktorý v tabuľke nemá riadok, je hlasná chyba programu, nie tichý predvolený výsledok. | *(nové)* |
+| **DD-2** | Politika je **totálna**: pre každý stav vráti rozhodnutie. Tabuľka zrušenia nemá predvolený riadok — `BR-03` vymenúva každý stav zvlášť, takže stav bez riadku je hlasná chyba programu, nie ticho zrušená rezervácia. Riadok „každý iný" majú iba tabuľky, kde ho ako pravidlo hovorí špecifikácia sama: potvrdiť možno *iba* `DRAFT` (OP-03), vypršať môže *iba* `PENDING_APPROVAL` (`BR-08`). | *(nové)*; formulácia spresnená po porovnaní s kódom |
 | **DD-3** | Blokujúci cieľ sa nikdy nezapisuje priamo — iba cez `enter_blocking_state()`. Neblokujúci stav zapisuje operácia menovaným literálom. | ADR-01, platí od C03 |
 | **DD-4** | `EXPIRED` má jedného zapisovateľa a jeho zápis je commitnutý **skôr**, než operácia skončí zamietnutím. | C03, `R-3`; spresnené |
 | **DD-5** | Predpoklady alokácie majú jednu implementáciu a pevné poradie: `BR-05`, potom `BR-04`, obe pred `BR-02`. | *(nové)* |
@@ -1093,7 +1098,8 @@ Failures (ako Decision.rejection, nie ako výnimka):
 - TOO_LATE
 - EXPIRED
 
-Stav bez riadku v tabuľke -> AssertionError (chyba programu, DD-2).
+cancel_decision: stav bez riadku v tabuľke -> AssertionError (chyba
+programu, DD-2).
 ```
 
 Štyri tvary rozhodnutia:
@@ -1232,11 +1238,14 @@ classDiagram
 - **Do `Session` nevedie od `TransitionPolicy` žiadna šípka.** To je `DD-1`:
   rozhodnutie nepozná perzistenciu. Časové predikáty si politika berie
   z `domain/rules.py` (`may_cancel_confirmed`, `approval_request_is_alive`).
-- **Do stavu `Reservation` zapisujú práve dva prvky** a majú rozdelené, čo:
-  blokujúce stavy iba `InvariantGuard` (`DD-3`), `CANCELLED` a `EXPIRED`
-  iba `LifecycleOperations`.
-- **`commit()` volá iba `LifecycleOperations`** (`DD-6`). `InvariantGuard`
-  session používa na zámok a dotaz, nie na ukončenie transakcie.
+- **Vnútri jednotky zapisujú do stavu `Reservation` dva prvky** a majú
+  rozdelené, čo: blokujúce stavy iba `InvariantGuard` (`DD-3`), `CANCELLED`
+  a `EXPIRED` iba `LifecycleOperations`. (`REJECTED` zapisuje
+  `ApprovalWorkflow` — mimo jednotky, G3.)
+- **Vnútri jednotky commituje iba `LifecycleOperations`** (`DD-6`).
+  `InvariantGuard` session používa na zámok a dotaz, nie na ukončenie
+  transakcie; `SharedPreconditions` iba čítajú. `ApprovalWorkflow` commituje
+  vlastnú operáciu — jeho prácu so `Session` diagram nekreslí.
 - `LifecycleOperations`, `InvariantGuard` a `SharedPreconditions` sú skupiny
   funkcií jedného súboru `services/reservations.py`, nie triedy — rovnako ako
   prvky v G2. `ApprovalWorkflow` je mimo jednotky; v diagrame je preto, že je
@@ -1344,7 +1353,7 @@ Preconditions:    session v READ COMMITTED; now odčítané raz
 Postconditions:   stav je cieľ z confirm_decision, commitnutý; BR-02 platí
 Side effects:     zámok nad riadkom rezervácie, potom nad riadkom prístroja;
                   jeden commit
-Failure behavior: v poradí z C05.8; pri každom zamietnutí zostáva DRAFT
+Failure behavior: v poradí z C05.8; pri žiadnom zamietnutí sa stav nemení
                   a nič sa necommituje
 ```
 
@@ -1420,7 +1429,9 @@ operácia(session, id, by, now):
 
 Posledná vetva nie je formalita. Keby politika po budúcej zmene vrátila
 cieľ, ktorý operácia nevie vykonať, tiché pokračovanie by vrátilo úspech bez
-zápisu.
+zápisu. V zrušení je to výslovná vetva (`AssertionError`). V potvrdení tú
+istú úlohu plní kontrakt strážcu: cieľ, ktorý nie je blokujúci stav, odmietne
+`enter_blocking_state()` cez `ValueError`.
 
 ### Poradie zamietnutí (`DD-7`)
 
