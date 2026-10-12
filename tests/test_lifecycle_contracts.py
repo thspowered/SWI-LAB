@@ -13,7 +13,8 @@ spojenie. Samotna rozhodovacia tabulka je overena na urovni unit
 v test_transitions.py.
 
 Stav sa tu cita cez `new_session`, nie cez `session.refresh()`. Refresh
-bezi v tej istej transakcii a videl by aj zapis, ktory nikto necommitol.
+bezi v tej istej transakcii: zapis, ktory je iba flushnuty a nikto ho
+necommitol, by videl tiez (overene mutaciou, viz evidence C05).
 """
 
 import uuid

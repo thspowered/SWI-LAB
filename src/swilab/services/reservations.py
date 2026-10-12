@@ -10,12 +10,18 @@ Logicke prvky architektury su FUNKCIE tohto modulu, nie samostatne subory:
 
   Reservation Lifecycle   confirm_reservation, cancel_reservation,
                           create_reservation, enter_blocking_state,
-                          expire_request_if_dead + zamky a predikat BR-02
+                          expire_request_if_dead, _write_expired
+                          + zamky a predikat BR-02
   Approval Workflow       decide_reservation
   Availability Query      check_availability
 
 Priradenie funkcia -> prvok a smer zavislosti medzi prvkami strazi
 tests/test_architecture_conformance.py.
+
+Vnutro Reservation Lifecycle podla C05 (ten isty dokument, C05.3):
+o prechode ROZHODUJE cista politika swilab/domain/transitions.py,
+funkcie tu rozhodnutie VYKONAVAJU - zamok, zapis, commit. Lehotu ani
+zivost ziadosti si sluzba sama nevyhodnocuje.
 """
 
 import uuid
@@ -25,13 +31,13 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from swilab.domain.rules import (
-    approval_request_is_alive,
-    certification_covers,
-    is_interval_valid,
-    may_cancel_confirmed,
-)
+from swilab.domain.rules import certification_covers, is_interval_valid
 from swilab.domain.states import BLOCKING_STATES, ReservationState, UserRole
+from swilab.domain.transitions import (
+    cancel_decision,
+    confirm_decision,
+    expiry_decision,
+)
 from swilab.errors import DomainError, ErrorCode
 from swilab.models import Certification, Instrument, Reservation, User
 
@@ -78,6 +84,38 @@ def _require_authorized(reservation: Reservation, requester: User) -> None:
         raise DomainError(
             ErrorCode.FORBIDDEN,
             "rezervaciu smie menit iba jej vlastnik alebo veduci laboratoria",
+        )
+
+
+def _require_allocatable(
+    session: Session, *, reservation: Reservation, instrument: Instrument
+) -> None:
+    """Predpoklady alokacie: BR-05, potom BR-04 (C05, DD-5).
+
+    Jedina implementacia pre potvrdenie (OP-03) aj schvalenie (OP-05) -
+    REQ-04 aj REQ-11 ziadaju to iste. Poradie je z diagramov aktivit 3.3
+    a 3.5; BR-02 prichadza az po nich, v enter_blocking_state().
+
+    Certifikat sa overuje VLASTNIKOVI rezervacie, nie ziadatelovi:
+    supervisor moze potvrdit alebo schvalit cudziu rezervaciu, ale nie za
+    niekoho, kto skolenie nema.
+    """
+    if not instrument.is_active:
+        raise DomainError(ErrorCode.INSTRUMENT_INACTIVE, "pristroj nie je aktivny")
+
+    certifications = session.scalars(
+        select(Certification).where(
+            Certification.user_id == reservation.user_id,
+            Certification.category == instrument.category,
+        )
+    ).all()
+    if not any(
+        certification_covers(c.valid_until, reservation.starts_at)
+        for c in certifications
+    ):
+        raise DomainError(
+            ErrorCode.MISSING_CERTIFICATION,
+            "vlastnik rezervacie nema platny certifikat na kategoriu pristroja",
         )
 
 
@@ -210,27 +248,35 @@ def enter_blocking_state(
     reservation.state = target_state
 
 
+def _write_expired(session: Session, reservation: Reservation) -> None:
+    """JEDINE miesto, kde sa zapisuje EXPIRED (BR-08, nalez N-04; C05, DD-4).
+
+    Commit je sucastou zapisu. Vyprsanie je jediny pripad, ked operacia
+    zmeni stav a napriek tomu skonci zamietnutim - bez commitu PRED
+    vynimkou by zapis zahodil rollback pri zatvoreni session a ziadost by
+    ostala visiet v PENDING_APPROVAL.
+
+    CI ziadost vyprsala, tu nerozhoduje nikto - to je expiry_decision().
+    """
+    reservation.state = ReservationState.EXPIRED
+    session.commit()
+
+
 def expire_request_if_dead(
     session: Session, *, reservation: Reservation, now: datetime
 ) -> None:
-    """JEDINE miesto, kde sa zapisuje EXPIRED (BR-08, REQ-15, nalez N-04).
+    """Zapis vyprsania pre operaciu, ktora na ziadost smeruje (REQ-15).
 
-    Ziadost, ktorej uz nastal starts_at, sa pri operacii, ktora na nu
-    smeruje (OP-04, OP-05), zapise ako EXPIRED a operacia sa zamietne.
-    Je to jedine miesto v sluzbe, kde operacia zmeni stav a napriek tomu
-    skonci zamietnutim - preto commit pred vynimkou.
-
-    Pre ine stavy nez PENDING_APPROVAL nerobi nic: DRAFT nevyprsi (N-05).
+    Rozhranie, cez ktore o vyprsanie ziada Approval Workflow (G2). Ci
+    ziadost vyprsala, rozhoduje expiry_decision() - to iste znenie pouziva
+    aj zrusenie (OP-04). Vyprsana ziadost sa zapise ako EXPIRED a operacia
+    sa zamietne; pre ine stavy nez PENDING_APPROVAL sa nedeje nic (N-05).
     """
-    if reservation.state is not ReservationState.PENDING_APPROVAL:
+    decision = expiry_decision(reservation.state, reservation.starts_at, now)
+    if decision.target is None:
         return
-    if approval_request_is_alive(reservation.starts_at, now):
-        return
-    reservation.state = ReservationState.EXPIRED
-    session.commit()
-    raise DomainError(
-        ErrorCode.EXPIRED, "ziadost o schvalenie vyprsala - jej termin uz zacal"
-    )
+    _write_expired(session, reservation)
+    raise DomainError(decision.rejection, decision.reason)
 
 
 def create_reservation(
@@ -342,51 +388,31 @@ def confirm_reservation(
     a REQ-16 (rezervacia opusti DRAFT najviac raz) garantuje ADR-01:
     zamok nad riadkom rezervacie drzi tato funkcia od prveho kroku
     a o BR-02 rozhoduje enter_blocking_state() pod zamkom pristroja.
+
+    Stav, cas aj volbu cieloveho stavu posudzuje confirm_decision();
+    tato funkcia rozhodnutie vykona.
     """
     reservation = _lock_reservation(session, reservation_id)
 
     requester = _require_user(session, requested_by)
     _require_authorized(reservation, requester)
 
-    if reservation.state is not ReservationState.DRAFT:
-        raise DomainError(
-            ErrorCode.INVALID_STATE,
-            f"potvrdit mozno iba rezervaciu v stave DRAFT, nie {reservation.state}",
-        )
-    if now >= reservation.starts_at:
-        raise DomainError(
-            ErrorCode.ALREADY_STARTED,
-            "rezervaciu po jej zaciatku uz nemozno potvrdit",
-        )
-
+    # Pristroj sa nacita PRED rozhodnutim, lebo politika potrebuje
+    # requires_approval (REQ-10). Poradie zamietnuti to nemeni: neznamy
+    # pristroj cudzi kluc nepripusti.
     instrument = _require_instrument(session, reservation.instrument_id)
-    if not instrument.is_active:
-        raise DomainError(ErrorCode.INSTRUMENT_INACTIVE, "pristroj nie je aktivny")
-
-    # BR-04: certifikat sa overuje vlastnikovi rezervacie, nie ziadatelovi -
-    # supervisor moze potvrdit cudziu rezervaciu, ale nie za niekoho, kto
-    # skolenie nema.
-    certification = session.scalars(
-        select(Certification).where(
-            Certification.user_id == reservation.user_id,
-            Certification.category == instrument.category,
-        )
-    ).all()
-    if not any(certification_covers(c.valid_until, reservation.starts_at) for c in certification):
-        raise DomainError(
-            ErrorCode.MISSING_CERTIFICATION,
-            "pouzivatel nema platny certifikat na kategoriu pristroja",
-        )
-
-    # REQ-10: pristroj rozhoduje, ci rezervacia rovno alokuje, alebo sa
-    # stava ziadostou. Blokuje pristroj v oboch pripadoch.
-    target_state = (
-        ReservationState.PENDING_APPROVAL
-        if instrument.requires_approval
-        else ReservationState.CONFIRMED
+    decision = confirm_decision(
+        reservation.state,
+        reservation.starts_at,
+        now,
+        requires_approval=instrument.requires_approval,
     )
+    if decision.rejection is not None:
+        raise DomainError(decision.rejection, decision.reason)
+
+    _require_allocatable(session, reservation=reservation, instrument=instrument)
     enter_blocking_state(
-        session, reservation=reservation, target_state=target_state, now=now
+        session, reservation=reservation, target_state=decision.target, now=now
     )
     session.commit()
     return reservation
@@ -404,44 +430,38 @@ def cancel_reservation(
     CANCELLED nie je zmazanie dat: zaznam zostava, iba prestava blokovat
     pristroj.
 
-    Poradie kontrol pre PENDING_APPROVAL je dolezite: expiracia (BR-08)
-    ma prednost pred politikou rusenia (BR-03). Obe pravidla davali pre
-    ziadost po starts_at opacnu odpoved - nalez N-04.
+    Co zrusenie s rezervaciou v danom stave urobi, rozhoduje
+    cancel_decision() - vratane toho, ze expiracia (BR-08) ma prednost
+    pred politikou rusenia (BR-03, nalez N-04). Tato funkcia rozhodnutie
+    vykona.
     """
     reservation = _lock_reservation(session, reservation_id)
 
     requester = _require_user(session, requested_by)
+    # Opravnenie sa overuje PRED rozhodnutim, teda aj pri uz zrusenej
+    # rezervacii: idempotencia (REQ-09) neznamena, ze operaciu smie
+    # zopakovat ktokolvek.
     _require_authorized(reservation, requester)
 
-    # REQ-09: opakovane zrusenie je uspech bez zmeny stavu. Kontrola
-    # opravnenia prebieha aj tu - idempotencia neznamena, ze operaciu smie
-    # zopakovat ktokolvek.
-    if reservation.state is ReservationState.CANCELLED:
-        return CancelResult(reservation=reservation, changed=False)
+    decision = cancel_decision(reservation.state, reservation.starts_at, now)
+    match decision.target:
+        case None:
+            pass
+        case ReservationState.CANCELLED:
+            reservation.state = ReservationState.CANCELLED
+            session.commit()
+        case ReservationState.EXPIRED:
+            _write_expired(session, reservation)
+        case _:
+            # Politika vratila ciel, ktory zrusenie nevie vykonat. Tiche
+            # pokracovanie by vratilo uspech bez zapisu.
+            raise AssertionError(
+                f"zrusenie nevie vykonat prechod do {decision.target}"
+            )
 
-    # REQ-14: REJECTED a EXPIRED su ine koncove stavy. Ticho "uspesne"
-    # zrusenie by zakrylo, ze rezervaciu zamietol clovek alebo prepadla.
-    if reservation.state in (ReservationState.REJECTED, ReservationState.EXPIRED):
-        raise DomainError(
-            ErrorCode.INVALID_STATE,
-            f"rezervaciu v stave {reservation.state} nemozno zrusit",
-        )
-
-    # Nalez N-04: vyprsana ziadost sa v KAZDEJ operacii, ktora ju cita,
-    # povazuje za EXPIRED. Stav sa zapise a zrusenie sa zamietne.
-    expire_request_if_dead(session, reservation=reservation, now=now)
-
-    if reservation.state is ReservationState.CONFIRMED and not may_cancel_confirmed(
-        reservation.starts_at, now
-    ):
-        raise DomainError(
-            ErrorCode.TOO_LATE,
-            "potvrdenu rezervaciu mozno zrusit len viac ako 60 minut pred zaciatkom",
-        )
-
-    reservation.state = ReservationState.CANCELLED
-    session.commit()
-    return CancelResult(reservation=reservation, changed=True)
+    if decision.rejection is not None:
+        raise DomainError(decision.rejection, decision.reason)
+    return CancelResult(reservation=reservation, changed=decision.target is not None)
 
 
 def decide_reservation(
@@ -507,23 +527,7 @@ def decide_reservation(
         return reservation
 
     instrument = _require_instrument(session, reservation.instrument_id)
-    if not instrument.is_active:
-        raise DomainError(ErrorCode.INSTRUMENT_INACTIVE, "pristroj nie je aktivny")
-
-    certifications = session.scalars(
-        select(Certification).where(
-            Certification.user_id == reservation.user_id,
-            Certification.category == instrument.category,
-        )
-    ).all()
-    if not any(
-        certification_covers(c.valid_until, reservation.starts_at)
-        for c in certifications
-    ):
-        raise DomainError(
-            ErrorCode.MISSING_CERTIFICATION,
-            "vlastnik rezervacie nema platny certifikat na kategoriu pristroja",
-        )
+    _require_allocatable(session, reservation=reservation, instrument=instrument)
 
     enter_blocking_state(
         session,

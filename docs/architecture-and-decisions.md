@@ -708,17 +708,18 @@ Kde prvky ležia v kóde:
 | Prvok | Kód |
 | ----- | --- |
 | Reservation API | `api/reservations.py`, `main.py` |
-| Reservation Lifecycle | `services/reservations.py` — `create_reservation`, `confirm_reservation`, `cancel_reservation`, `enter_blocking_state`, `expire_request_if_dead`, `_lock_reservation`, `_lock_instrument`, `_overlapping_blocking` |
+| Reservation Lifecycle | `services/reservations.py` — `create_reservation`, `confirm_reservation`, `cancel_reservation`, `enter_blocking_state`, `expire_request_if_dead`, `_write_expired` *(C05)*, `_lock_reservation`, `_lock_instrument`, `_overlapping_blocking` |
 | Approval Workflow | `services/reservations.py` — `decide_reservation` |
 | Availability Query | `services/reservations.py` — `check_availability` |
-| Domain Rules | `domain/rules.py`, `domain/states.py`, `errors.py` |
+| Domain Rules | `domain/rules.py`, `domain/states.py`, `domain/transitions.py` *(C05)*, `errors.py` |
 | Clock | `clock.py` |
 | Reservation Store | `models.py`, `db.py`, `config.py` |
 | Notification Integration | — *(plánované)* |
 
 Tri prvky sú **funkcie jedného modulu**, nie samostatné súbory (delta J,
-`KEEP`). Spoločné kontroly predpokladov `_require_user`, `_require_instrument`
-a `_require_authorized` smie volať ktorýkoľvek z nich. To isté priradenie je
+`KEEP`). Spoločné kontroly predpokladov `_require_user`, `_require_instrument`,
+`_require_authorized` a `_require_allocatable` *(C05)* smie volať ktorýkoľvek
+z nich. To isté priradenie je
 zapísané v `tests/test_architecture_conformance.py` (`ELEMENTS`); test padne,
 keď v module pribudne funkcia bez prvku.
 
