@@ -708,20 +708,26 @@ Kde prvky ležia v kóde:
 | Prvok | Kód |
 | ----- | --- |
 | Reservation API | `api/reservations.py`, `main.py` |
-| Reservation Lifecycle | `services/reservations.py` — `create_reservation`, `confirm_reservation`, `cancel_reservation`, `enter_blocking_state`, `expire_request_if_dead`, `_write_expired` *(C05)*, `_lock_reservation`, `_lock_instrument`, `_overlapping_blocking` |
+| Reservation Lifecycle | `services/reservations.py` — `create_reservation`, `confirm_reservation`, `cancel_reservation`, `enter_blocking_state`, `expire_request_if_dead`, `_write_expired` *(C05)*, `_lock_reservation`, `_lock_instrument`, `_overlapping_blocking`; rozhodovacia časť `domain/transitions.py` *(C05)* |
 | Approval Workflow | `services/reservations.py` — `decide_reservation` |
 | Availability Query | `services/reservations.py` — `check_availability` |
-| Domain Rules | `domain/rules.py`, `domain/states.py`, `domain/transitions.py` *(C05)*, `errors.py` |
+| Domain Rules | `domain/rules.py`, `domain/states.py`, `errors.py` |
 | Clock | `clock.py` |
 | Reservation Store | `models.py`, `db.py`, `config.py` |
 | Notification Integration | — *(plánované)* |
 
 Tri prvky sú **funkcie jedného modulu**, nie samostatné súbory (delta J,
-`KEEP`). Spoločné kontroly predpokladov `_require_user`, `_require_instrument`,
-`_require_authorized` a `_require_allocatable` *(C05)* smie volať ktorýkoľvek
-z nich. To isté priradenie je
-zapísané v `tests/test_architecture_conformance.py` (`ELEMENTS`); test padne,
-keď v module pribudne funkcia bez prvku.
+`KEEP`). Spoločné kontroly predpokladov `_require_user`, `_require_instrument`
+a `_require_authorized` smie volať ktorýkoľvek z nich; `_require_allocatable`
+*(C05)* iba operácie, ktoré prístroj alokujú — potvrdenie a schválenie. To isté
+priradenie je zapísané v `tests/test_architecture_conformance.py` (`ELEMENTS`);
+test padne, keď v module pribudne funkcia bez prvku.
+
+*(C05)* Politika prechodov `domain/transitions.py` je **rozhodovacia časť
+`Reservation Lifecycle`** — vlastníkom rozhodnutia o prechode (`O-1`) ostáva
+lifecycle. V balíku `domain/` leží preto, že nesmie poznať perzistenciu;
+importuje iba `Domain Rules`. Volať ju smie iba lifecycle, čo stráži ten istý
+súbor testov. Podrobne v C05.3.
 
 ## G3. Vlastníctvo prechodov v statecharte
 
@@ -731,7 +737,7 @@ keď v module pribudne funkcia bez prvku.
 | `DRAFT → PENDING_APPROVAL` | Reservation Lifecycle | Reservation API; o tom, že sa ide touto vetvou, rozhoduje `Instrument.requires_approval` (`REQ-10`) |
 | `PENDING_APPROVAL → CONFIRMED` | **Reservation Lifecycle** (vstup do blokujúceho stavu) | **Approval Workflow** po kladnom rozhodnutí vedúceho |
 | `PENDING_APPROVAL → REJECTED` | Approval Workflow | Reservation API (vedúci) |
-| `PENDING_APPROVAL → EXPIRED` | **Reservation Lifecycle** (`expire_request_if_dead()`) | výslovne nikto — vyvolá ho plynutie času (`BR-08`); zapíše sa pri najbližšom zrušení (Reservation Lifecycle) alebo rozhodnutí (Approval Workflow), ktoré na žiadosť smeruje (`TBD-08`) |
+| `PENDING_APPROVAL → EXPIRED` | **Reservation Lifecycle** (`expire_request_if_dead()`; od C05 rozhoduje `expiry_decision()` a zapisuje `_write_expired()` — `expire_request_if_dead()` je rozhranie pre Approval Workflow) | výslovne nikto — vyvolá ho plynutie času (`BR-08`); zapíše sa pri najbližšom zrušení (Reservation Lifecycle) alebo rozhodnutí (Approval Workflow), ktoré na žiadosť smeruje (`TBD-08`) |
 | `DRAFT → CANCELLED`, `CONFIRMED → CANCELLED`, `PENDING_APPROVAL → CANCELLED` | Reservation Lifecycle | Reservation API (vlastník alebo vedúci) |
 
 Rozdiel medzi tretím a štvrtým riadkom je celý obsah ADR-01. Zamietnutie je
@@ -907,6 +913,9 @@ a commituje; `Reservation DB` je externý runtime prvok (G4), nie trieda.
 `enter_blocking_state()` je jediná operácia, ktorá priraďuje blokujúci stav —
 a `ApprovalWorkflow` k nej vedie závislosť, nie vlastný zápis.
 
+Diagram zachytáva stav po C03. Vnútro `Reservation Lifecycle` po C05 —
+politika prechodov, `_write_expired()`, `_require_allocatable()` — je v C05.5.
+
 ## I. Cross-view kontrola
 
 | Kontrola | Výsledok |
@@ -945,7 +954,7 @@ viditeľné namiesto toho, aby sme prepísali výsledky vyššie.
 | kritická sekcia | žiadna — kontrola a zápis bez ochrany | zámok nad riadkom prístroja pred kontrolou prekryvu; berie si ho sám vlastník invariantu | `CHANGE` |
 | prechod nad jednou rezerváciou | `session.get()` bez zámku, `REQ-16` otvorený | `_lock_reservation()` vo všetkých troch meniacich operáciách | `CHANGE` |
 | predikát prekryvu | dve formy, `rules.intervals_overlap()` mŕtva a komentár o nej klamal | jedna forma v SQL | `CHANGE` |
-| zápis `EXPIRED` | dve kópie: `cancel_reservation():323` a `decide_reservation():395` | jedno miesto: `expire_request_if_dead()` v lifecycle | `CHANGE` |
+| zápis `EXPIRED` | dve kópie: `cancel_reservation():323` a `decide_reservation():395` | jedno miesto: `expire_request_if_dead()` v lifecycle *(od C05: `_write_expired()`)* | `CHANGE` |
 | úroveň izolácie | predvolená hodnota servera, nikde nezapísaná | `READ COMMITTED` nastavená výslovne v `db.py` | `CHANGE` |
 | testy súbehu | `xfail(strict=True)`, bariéra vnútri kritickej sekcie; súbeh nad OP-05 bez testu | bariéra na vstupe operácie, bez `xfail`; doplnený súbeh zrušenia so schválením a dvoch rozhodnutí | `CHANGE` |
 | ochrana vlastníctva invariantu | žiadna | opakovateľná statická kontrola | `CHANGE` |
@@ -968,19 +977,35 @@ rozhodnutia by bolo presne to, pred čím varuje sekcia K zadania.
 Nadväzuje na C03 (G2, G3, ADR-01). Architektúra rozhodla, **kde** leží
 odpovednosť za životný cyklus rezervácie. Tento oddiel hovorí, **ako** má tá
 jednotka fungovať vo vnútri — tak, aby sa z návrhu dali odvodiť testy.
-Baseline správania zostáva **v0.2**: žiadny pozorovateľný výsledok sa nemení.
+Baseline správania zostáva **v0.2**: nemení sa žiadny stav, kód zamietnutia
+ani HTTP status. (Jediný rozdiel viditeľný zvonka — text jednej správy — je
+v evidence.)
 
 Oddiel je napísaný **pred zmenou kódu**, nad stavom `main` po C03 (commit
 `63ec3f7`). Čo v tej chvíli v kóde nebolo, je označené **(nové)**. Porovnanie
 návrhu s implementáciou je v `evidence-and-evolution.md`, oddiel
 „C05 — DD Verification Evidence".
 
-Po porovnaní sa v tomto oddiele zmenili **štyri formulácie** — všetky sú
-vymenované v evidence, v tabuľke „Design ↔ implementation mismatch".
-Rozhodovacie tabuľky ani predpoklady, postconditions a zlyhania kontraktov sa
-nemenili; pôvodné znenie je v commite `9e066e6`.
+**Čo je v návrhu nové a čo nie.** Návrh rozpracúva jednotku, ktorá už
+existuje, takže nie každé rozhodnutie mení kód:
 
-## C05.1 Vybraná jednotka
+- `DD-1`, `DD-2` a `DD-5` sú **nové rozhodnutia** — kód z C03 ich nespĺňal
+  a implementácia ho kvôli nim mení.
+- `DD-3`, `DD-4`, `DD-6` a `DD-7` sú **zámer, ktorý kód už realizoval**, ale
+  iba mlčky: poradím príkazov alebo vetou v docstringu, bez kontraktu a bez
+  testu. Kód sa pri nich nemení; pribúda kontrakt, podľa ktorého sa dajú
+  overiť.
+
+Aj to druhé je návrh, nie opis: desať vložených chýb v správaní, ktoré
+existovalo už pred C05, sada testov z C03 prepustila (evidence, mutácie).
+
+Po porovnaní s implementáciou a po nezávislej kontrole sa v tomto oddiele
+menili formulácie a kontrakt politiky dostal štyri doplnené vety. Každá zmena
+je vymenovaná v evidence („Design ↔ implementation mismatch" a „Nezávislá
+kontrola"). Rozhodovacie tabuľky sa nemenili; pôvodné znenie je v commite
+`9e066e6`.
+
+## C05.1 Vybraná jednotka (Selected architecture unit)
 
 | Položka | Hodnota |
 | ------- | ------- |
@@ -989,20 +1014,26 @@ nemenili; pôvodné znenie je v commite `9e066e6`.
 | Related scenario(s) | `OP-03 Confirm Reservation`, `OP-04 Cancel Reservation` (diagramy aktivít 3.3 a 3.4); z `OP-05` iba vstup do blokujúceho stavu a zápis vypršania |
 | Relevant business rule(s) | `BR-02`, `BR-03`, `BR-04`, `BR-05`, `BR-06`, `BR-08` |
 
-**Hranica.** Vnútri sú funkcie prvku `Reservation Lifecycle` podľa G2 a to,
-čo si od `Domain Rules` berú. Mimo zostáva vlastné rozhodnutie vedúceho
-(`Approval Workflow`: `BR-07`, zápis `REJECTED`), `Availability Query` a HTTP
-vrstva. `OP-01 Create` do jednotky patrí, ale nerozhoduje nad uloženým stavom —
-viď C05.9.
+**Hranica.** Vnútri sú funkcie prvku `Reservation Lifecycle` podľa G2 a jeho
+rozhodovacia časť — politika prechodov, ktorú tento návrh zavádza (C05.3).
+Mimo zostáva vlastné rozhodnutie vedúceho (`Approval Workflow`: `BR-07`,
+zápis `REJECTED`), `Availability Query` a HTTP vrstva. `OP-01 Create` do
+jednotky patrí, ale nerozhoduje nad uloženým stavom — viď C05.9.
+
+Na jednom mieste návrh siaha za hranicu jednotky: `DD-5` spája kontrolu
+predpokladov alokácie, ktorej druhá kópia je v `decide_reservation()`, teda
+v `Approval Workflow`. Mení sa tam iba to, **koho** schválenie volá; jeho
+vlastné rozhodnutie zostáva nedotknuté.
 
 **Prečo táto jednotka.** C03 dalo invariantu jedného vlastníka, ale vnútro
 jednotky ostalo nenavrhnuté. V kóde `63ec3f7` to vidno na troch miestach:
 
 1. Rozhodnutie o prechode je rozložené v reťazcoch `if` troch funkcií
    (`services/reservations.py:351–360`, `:419–440`, `:225–233`) a prepletené
-   s dotazmi. Hranice pravidiel (`60:00`, `starts_at`) sa preto dajú overiť iba
-   proti databáze; čisté funkcie v `domain/rules.py` nemajú ani jeden priamy
-   test — žiadny test ich neimportuje.
+   s dotazmi. Ktorý stav sa riadi ktorou hranicou, aj hranica `starts_at` pri
+   potvrdení (`:356`), sa preto dajú overiť iba proti databáze. Samotné
+   predikáty `60:00` a živosti sú čisté funkcie v `domain/rules.py`, ale nemajú
+   ani jeden priamy test — žiadny test ich neimportuje.
 2. Kontrola predpokladov alokácie (`BR-05`, `BR-04`) existuje v dvoch kópiách:
    `confirm_reservation` (`:362–379`) a `decide_reservation` (`:509–526`).
    Je to ten istý druh zdvojenia, aký C03 našlo pri `BR-02` a pri zápise
@@ -1012,7 +1043,7 @@ jednotky ostalo nenavrhnuté. V kóde `63ec3f7` to vidno na troch miestach:
    volajúceho, neoveruje nič priamo; testy súbehu to dokladajú len nepriamo
    a pravdepodobnostne (8 kôl).
 
-## C05.2 Podrobné odpovednosti
+## C05.2 Podrobné odpovednosti (Detailed responsibilities)
 
 | # | Detailed responsibility | Why is it needed? |
 | - | ----------------------- | ----------------- |
@@ -1024,22 +1055,24 @@ jednotky ostalo nenavrhnuté. V kóde `63ec3f7` to vidno na troch miestach:
 | **L-6** | zapísať vypršanie tak, aby prežilo zamietnutie operácie | `BR-08`, nález `N-04`, `REQ-15` — jediný prípad, keď operácia zmení stav a aj tak skončí zamietnutím |
 | **L-7** | určiť hranicu transakcie a výsledok operácie | C2: commit ukončuje kritickú sekciu a uvoľňuje zámky; `REQ-09` potrebuje rozlíšiť zrušenie od zopakovania (`changed`) |
 
-## C05.3 Návrhové prvky a vlastníctvo
+## C05.3 Návrhové prvky a vlastníctvo (Design elements and ownership)
 
 | Responsibility | Owner | State/data | Why here? |
 | -------------- | ----- | ---------- | --------- |
-| L-1 | `_lock_reservation()` | riadok `reservations` pod zámkom `FOR UPDATE` až do konca transakcie | jediná cesta, ktorou služba rezerváciu načíta (stráži test z C03) |
-| L-2 | `_require_user()`, `_require_authorized()` | `User.role`, `Reservation.user_id`; iba čítajú | bez stavu, zdieľajú ich všetky operácie |
-| L-3 | **Transition Policy** *(nové)* — `domain/transitions.py`: `confirm_decision()`, `cancel_decision()`, `expiry_decision()`, výsledok `Decision` | žiadny vlastný stav; vstupom sú hodnoty `state`, `starts_at`, `now`, `requires_approval` | čistá funkcia nepozná session ani entity — celá tabuľka prechodov je na jednom mieste a dá sa overiť bez databázy |
+| L-1 | `_lock_reservation()` | riadok `reservations` pod zámkom `FOR UPDATE` až do konca transakcie | jediná cesta, ktorou služba načíta rezerváciu, ktorej stav ide meniť (stráži test z C03) |
+| L-2 | `_require_user()`, `_require_authorized()` | `User.role`, `Reservation.user_id`; iba čítajú | bez stavu; zdieľajú ich potvrdenie a zrušenie, `_require_user()` aj vytvorenie a rozhodnutie vedúceho |
+| L-3 | **Transition Policy** *(nové)* — `domain/transitions.py`: `confirm_decision()`, `cancel_decision()`, `expiry_decision()`, výsledok `Decision` | žiadny vlastný stav; vstupom sú hodnoty `state`, `starts_at`, `now`, `requires_approval` | čistá funkcia nepozná session ani entity — tabuľka prechodov jednotky (potvrdenie, zrušenie, vypršanie) je na jednom mieste a dá sa overiť bez databázy |
 | L-4 | `_require_allocatable()` *(nové)* | `Instrument.is_active`, `Instrument.category`, `Certification.valid_until` **vlastníka**; iba číta | jedna implementácia pre potvrdenie aj schválenie |
 | L-5 | **Invariant Guard** — `enter_blocking_state()` s `_lock_instrument()` a `_overlapping_blocking()` | riadok `instruments` pod zámkom `FOR NO KEY UPDATE`, blokujúce rezervácie prístroja; **jediný zapisovateľ blokujúceho stavu** | ADR-01 |
 | L-6 | `_write_expired()` *(nové)* — volá ho zrušenie a `expire_request_if_dead()` | **jediný zapisovateľ `EXPIRED`**; commit je súčasťou zápisu | zápis musí byť potvrdený skôr, než operácia vyhodí zamietnutie, inak ho rollback zahodí |
 | L-7 | operácie `confirm_reservation()`, `cancel_reservation()` | transakcia: jeden commit na operáciu | hranica transakcie patrí operácii, ktorá prechod vykonáva (C2), nie strážcovi ani politike |
 
-`Transition Policy` leží fyzicky v balíku `domain/`, teda v prvku `Domain
-Rules` z G2 — nesmie poznať perzistenciu (C2, „`O-3` a `O-6` nesmú poznať
-perzistenciu"). Lifecycle ju používa cez závislosť, ktorú G2 už povoľuje
-(`Reservation Lifecycle → Domain Rules`). Nová hrana medzi prvkami nevzniká.
+`Transition Policy` je **rozhodovacia časť `Reservation Lifecycle`**:
+vlastníkom rozhodnutia o prechode (`O-1`) ostáva lifecycle, ako hovorí C2 a G3.
+Fyzicky leží v balíku `domain/`, lebo nesmie poznať perzistenciu, a importuje
+iba `Domain Rules` — čo G2 už povoľuje (`Reservation Lifecycle → Domain
+Rules`), takže nová hrana medzi prvkami nevzniká. Volať ju smú iba funkcie
+lifecycle; `Approval Workflow` ani API nie. Oboje stráži test.
 
 `_require_allocatable()` patrí medzi spoločné kontroly predpokladov z G2
 (vedľa `_require_user`, `_require_instrument`, `_require_authorized`): je bez
@@ -1059,7 +1092,7 @@ Na tieto rozhodnutia sa odkazujú testy a porovnanie s kódom.
 | **DD-6** | Hranica transakcie patrí operácii. Strážca invariantu ani politika necommitujú; zamietnutie bez cieľového stavu nezapíše nič. | C2; doteraz neoverené |
 | **DD-7** | Poradie zamietnutí je pevné (C05.8). Určuje, ktorý kód chyby volajúci dostane, keď neplatí viac vecí naraz. | diagramy aktivít 3.3, 3.4; doteraz iba poradím príkazov v kóde |
 
-## C05.4 Kľúčové rozhrania a kontrakty
+## C05.4 Kľúčové rozhrania a kontrakty (Key interfaces / contracts)
 
 ### Transition Policy *(nové)*
 
@@ -1087,10 +1120,13 @@ Postconditions:
   to isté
 - funkcia je totálna: pre každý zo šiestich stavov vráti Decision
 - Decision má práve jeden zo štyroch tvarov (tabuľka nižšie)
-- confirm_decision: target je CONFIRMED, PENDING_APPROVAL alebo žiadny
+- confirm_decision: target je CONFIRMED, PENDING_APPROVAL alebo žiadny;
+  vráti vždy PRÁVE JEDNO — cieľ, alebo zamietnutie
 - cancel_decision:  target je CANCELLED, EXPIRED alebo žiadny — nikdy
   blokujúci stav
 - expiry_decision:  target je EXPIRED alebo žiadny
+- zamietnutie vždy nesie dôvod (reason); jeho text je vec kódu (C05.9)
+- stav sa vo všetkých troch funkciách porovnáva hodnotou
 
 Failures (ako Decision.rejection, nie ako výnimka):
 - INVALID_STATE
@@ -1100,6 +1136,7 @@ Failures (ako Decision.rejection, nie ako výnimka):
 
 cancel_decision: stav bez riadku v tabuľke -> AssertionError (chyba
 programu, DD-2).
+Decision s tvarom mimo tabuľky nižšie -> ValueError už pri vytvorení.
 ```
 
 Štyri tvary rozhodnutia:
@@ -1107,13 +1144,15 @@ programu, DD-2).
 | `target` | `rejection` | Význam | Príklad |
 | -------- | ----------- | ------ | ------- |
 | stav | — | prechod: operácia uspeje a stav sa zmení | `DRAFT → CANCELLED` |
-| — | — | úspech bez zmeny stavu | zrušenie už zrušenej rezervácie (`REQ-09`) |
+| — | — | nič sa nemení: pri zrušení úspech bez zmeny stavu, pri vypršaní „žiadosť žije, operácia pokračuje" | zrušenie už zrušenej rezervácie (`REQ-09`) |
 | — | kód | zamietnutie, stav sa nemení | `TOO_LATE`, `INVALID_STATE`, `ALREADY_STARTED` |
 | `EXPIRED` | `EXPIRED` | stav sa zmení **a** operácia sa zamietne | vypršaná žiadosť (`N-04`, `REQ-15`) |
 
-Štvrtý tvar smie existovať iba ako dvojica `EXPIRED` / `EXPIRED`. `Decision`
-inú kombináciu cieľa so zamietnutím odmietne už pri vytvorení — rozhodnutie,
-ktoré špecifikácia nepozná, sa nedá ani zapísať.
+Štvrtý tvar smie existovať iba ako dvojica `EXPIRED` / `EXPIRED` — a platí to
+oboma smermi: `EXPIRED` sa nezapíše bez zamietnutia a kód `EXPIRED` sa nevráti
+bez zápisu. `Decision` iný tvar odmietne už pri vytvorení (`ValueError`) —
+rozhodnutie, ktoré špecifikácia nepozná, sa nedá ani zapísať. `confirm_decision`
+tvar „nič sa nemení" nevracia nikdy.
 
 Blokujúci `target` z `confirm_decision` nie je pokyn „zapíš". Znamená
 „požiadaj o vstup do tohto stavu": ešte ho čakajú predpoklady alokácie (L-4)
@@ -1166,7 +1205,7 @@ Failures, v tomto poradí:
 - MISSING_CERTIFICATION    (BR-04)
 ```
 
-## C05.5 Zameraný štrukturálny pohľad
+## C05.5 Zameraný štrukturálny pohľad (Focused structural view)
 
 ```mermaid
 classDiagram
@@ -1194,13 +1233,13 @@ classDiagram
         <<module>>
         +enter_blocking_state(session, reservation, target_state, now)
         -_lock_instrument(session, id) Instrument
-        -_overlapping_blocking(session, instrument_id, starts_at, ends_at, now) list
+        -_overlapping_blocking() list
     }
     class SharedPreconditions {
         <<module>>
-        +_require_user(session, id) User
-        +_require_authorized(reservation, requester)
-        +_require_allocatable(session, reservation, instrument)
+        ~_require_user(session, id) User
+        ~_require_authorized(reservation, requester)
+        ~_require_allocatable(session, reservation, instrument)
     }
     class Reservation {
         <<entity>>
@@ -1230,7 +1269,7 @@ classDiagram
     SharedPreconditions ..> Session : iba číta
     ApprovalWorkflow ..> InvariantGuard : žiada schválenie
     ApprovalWorkflow ..> LifecycleOperations : expire_request_if_dead()
-    ApprovalWorkflow ..> SharedPreconditions : L-4
+    ApprovalWorkflow ..> SharedPreconditions : predpoklady
 ```
 
 Čo má byť z diagramu vidno:
@@ -1241,7 +1280,8 @@ classDiagram
 - **Vnútri jednotky zapisujú do stavu `Reservation` dva prvky** a majú
   rozdelené, čo: blokujúce stavy iba `InvariantGuard` (`DD-3`), `CANCELLED`
   a `EXPIRED` iba `LifecycleOperations`. (`REJECTED` zapisuje
-  `ApprovalWorkflow` — mimo jednotky, G3.)
+  `ApprovalWorkflow` — mimo jednotky, G3. Počiatočný `DRAFT` zapisuje
+  a commituje `create_reservation()`, ktorá v diagrame nie je — C05.9.)
 - **Vnútri jednotky commituje iba `LifecycleOperations`** (`DD-6`).
   `InvariantGuard` session používa na zámok a dotaz, nie na ukončenie
   transakcie; `SharedPreconditions` iba čítajú. `ApprovalWorkflow` commituje
@@ -1250,8 +1290,15 @@ classDiagram
   funkcií jedného súboru `services/reservations.py`, nie triedy — rovnako ako
   prvky v G2. `ApprovalWorkflow` je mimo jednotky; v diagrame je preto, že je
   druhým klientom tých istých kontraktov.
+- `<<interface>>` pri `TransitionPolicy` označuje kontrakt z C05.4. V kóde je
+  to modul troch voľných funkcií, nie trieda s implementáciou.
+- `Instrument` v diagrame nie je, hoci jeho riadok je zámkom strážcu a jeho
+  príznaky sú vstupom L-3 a L-4: nikto z jednotky doň nezapisuje. `Session`
+  v ňom je preto, že práve na nej vidno `DD-1` (politika k nej nemá šípku)
+  a `DD-6` (kto commituje).
+- Diagram spresňuje H2 z C03 o vnútro jednotky; H2 sa nemení.
 
-## C05.6 Podrobná sekvencia — Cancel Reservation
+## C05.6 Podrobná sekvencia — Cancel Reservation (Detailed sequence)
 
 Zrušenie je zvolené preto, že na jednom scenári ukáže všetky štyri tvary
 rozhodnutia. `Confirm` na úrovni architektúry je v H1.
@@ -1298,7 +1345,7 @@ sequenceDiagram
 3. `BR-05` a `BR-04` overí `_require_allocatable()`, až potom ide blokujúci
    cieľ do `enter_blocking_state()`.
 
-## C05.7 Významné operácie
+## C05.7 Významné operácie (Important methods / operations)
 
 ```
 Operation:        cancel_decision(state, starts_at, now)
@@ -1355,6 +1402,7 @@ Side effects:     zámok nad riadkom rezervácie, potom nad riadkom prístroja;
                   jeden commit
 Failure behavior: v poradí z C05.8; pri žiadnom zamietnutí sa stav nemení
                   a nič sa necommituje
+                  cieľ, ktorý operácia nepozná -> AssertionError
 ```
 
 ```
@@ -1367,11 +1415,12 @@ Preconditions:    reservation načítaná cez _lock_reservation()
 Postconditions:   vypršaná žiadosť má stav EXPIRED, commitnutý
 Side effects:     commit (cez _write_expired)
 Failure behavior: DomainError(EXPIRED) po commite; rozhoduje expiry_decision
+                  iný cieľ než EXPIRED -> AssertionError
 ```
 
 `enter_blocking_state()` a `_require_allocatable()` majú kontrakt v C05.4.
 
-## C05.8 Rozhodovacia logika
+## C05.8 Rozhodovacia logika (Algorithm / decision logic)
 
 ### Tabuľka `cancel_decision`
 
@@ -1408,30 +1457,50 @@ aj `OP-05`.
 
 ### Vykonanie rozhodnutia
 
+Kostra je pre všetkých troch vykonávateľov rovnaká — načítaj pod zámkom, over
+oprávnenie, opýtaj sa politiky, vykonaj, commitni. Líši sa to, čo smie
+politika vrátiť:
+
 ```
-operácia(session, id, by, now):
-    r = _lock_reservation(id)                    # L-1
-    over žiadateľa a oprávnenie                  # L-2
-    d = politika(r.state, r.starts_at, now)      # L-3, bez I/O
+cancel_reservation(session, id, by, now):
+    r = _lock_reservation(id)                        # L-1
+    over žiadateľa a oprávnenie                      # L-2
+    d = cancel_decision(r.state, r.starts_at, now)   # L-3, bez I/O
 
     podľa d.target:
-        blokujúci stav -> _require_allocatable() # L-4
-                          enter_blocking_state() # L-5
-                          commit                 # L-7
-        CANCELLED      -> zápis menovaným literálom, commit
-        EXPIRED        -> _write_expired()       # L-6, commit je jeho súčasťou
-        žiadny         -> nič
-        čokoľvek iné   -> AssertionError
+        CANCELLED    -> zápis menovaným literálom, commit   # L-7
+        EXPIRED      -> _write_expired()             # L-6, commit je jeho súčasťou
+        žiadny       -> nič
+        čokoľvek iné -> AssertionError
 
     ak d.rejection: vyhoď DomainError(d.rejection, d.reason)
-    vráť výsledok
+    vráť CancelResult(changed = či d.target nejaký je)
 ```
 
-Posledná vetva nie je formalita. Keby politika po budúcej zmene vrátila
+```
+confirm_reservation(session, id, by, now):
+    r = _lock_reservation(id)                        # L-1
+    over žiadateľa a oprávnenie                      # L-2
+    načítaj prístroj                                 # politika potrebuje requires_approval
+    d = confirm_decision(r.state, r.starts_at, now, requires_approval)   # L-3
+
+    ak d.rejection:                vyhoď DomainError(d.rejection, d.reason)
+    ak d.target nie je blokujúci:  AssertionError    # ani „žiadny"
+
+    _require_allocatable()                           # L-4
+    enter_blocking_state(d.target)                   # L-5
+    commit                                           # L-7
+```
+
+`expire_request_if_dead()` vykoná z `expiry_decision` iba cieľ `EXPIRED` —
+zápis, commit, zamietnutie. Žiadny cieľ znamená návrat bez zmeny, čokoľvek
+iné `AssertionError`.
+
+Vetva „čokoľvek iné" nie je formalita. Keby politika po budúcej zmene vrátila
 cieľ, ktorý operácia nevie vykonať, tiché pokračovanie by vrátilo úspech bez
-zápisu. V zrušení je to výslovná vetva (`AssertionError`). V potvrdení tú
-istú úlohu plní kontrakt strážcu: cieľ, ktorý nie je blokujúci stav, odmietne
-`enter_blocking_state()` cez `ValueError`.
+zápisu. Potvrdenie ju má **hneď pri rozhodnutí**, nie až v strážcovi: strážca
+by neblokujúci cieľ odmietol tiež, ale až po predpokladoch alokácie, ktoré by
+chybu programu mohli prekryť bežným zamietnutím.
 
 ### Poradie zamietnutí (`DD-7`)
 
@@ -1448,6 +1517,9 @@ vetvu „neznámy žiadateľ" pri `OP-03` pomenovalo až C03 časť A (A3) a pri
 musí existovať"); návrh ju zaraďuje pred `FORBIDDEN`, lebo oprávnenie
 neexistujúceho žiadateľa sa nedá posúdiť.
 
+`UNKNOWN_INSTRUMENT` v poradí nie je. Potvrdenie síce prístroj načíta pred
+rozhodnutím politiky, ale rezerváciu bez prístroja cudzí kľúč nepripustí.
+
 ### Súbeh
 
 Politika sa vyhodnocuje **pod zámkom rezervácie**: medzi prečítaním stavu
@@ -1456,7 +1528,20 @@ v poradí rezervácia → prístroj. Nič z toho C05 nemení — je to mechanizm
 ADR-01; návrh iba hovorí, že rozhodnutie politiky je platné práve preto, že
 vzniklo vnútri tejto ochrany.
 
-## C05.9 Čo zámerne zostáva v kóde
+### Kde sa čo mení
+
+| Zmena | Kde | Čo ju postráži |
+| ----- | --- | -------------- |
+| lehota zrušenia potvrdenej rezervácie (60 min, `BR-03`) | konštanta `rules.CANCELLATION_LEAD_TIME` | `test_cancel_decision_table`, `test_rule_boundaries_are_strict` |
+| hranica „rezervácia už začala" pri potvrdení (`REQ-06`) | `confirm_decision()` — porovnanie je priamo v politike, nemá pomenovaný predikát | `test_confirm_decision_table_for_draft` |
+| živosť žiadosti (`BR-08`) | **dve miesta naraz**: `rules.approval_request_is_alive()` a SQL podmienka v `_overlapping_blocking()` | `test_liveness_in_the_overlap_query_agrees_with_the_policy` |
+| nový stav rezervácie | riadok v `cancel_decision()` — bez neho operácia skončí `AssertionError`; potvrdenie a vypršanie ho berú riadkom „každý iný"; ak má blokovať, aj `BLOCKING_STATES` | `test_policy_is_total_and_returns_only_shapes_from_the_contract`, `test_zoznam_blokujucich_stavov_sedi_s_kodom` |
+| nová operácia, ktorá mení stav | nová funkcia `*_decision` v politike a operácia v lifecycle, ktorá ju vykoná; blokujúci cieľ iba cez strážcu | `test_kazda_funkcia_sluzby_patri_prave_jednemu_prvku`, `test_operacie_rozhoduju_iba_cez_politiku` (treba ju doň doplniť), `test_blokujuci_stav_zapisuje_iba_vlastnik_invariantu` |
+| poradie zamietnutí (`DD-7`) | stav a čas: poradie vetiev v politike; ostatné: poradie krokov v operácii | `test_confirm_decision_judges_state_before_time`, `test_authorization_is_judged_before_the_state`, `test_allocation_preconditions_keep_one_order_on_both_paths` |
+| predpoklady alokácie (`BR-05`, `BR-04`) | `_require_allocatable()` — jedno miesto pre potvrdenie aj schválenie | `test_predpoklady_alokacie_maju_jednu_implementaciu` |
+| kto smie potvrdiť alebo zrušiť (`BR-06`) | `_require_authorized()` | `test_authorization_is_judged_before_the_state` |
+
+## C05.9 Čo zámerne zostáva v kóde (DD decisions intentionally left to code)
 
 - **Text zamietnutí** (`Decision.reason`) a preklad kódov na HTTP status.
   Kód zamietnutia je návrh, veta pre človeka nie.
@@ -1465,8 +1550,10 @@ vzniklo vnútri tejto ochrany.
 - **`create_reservation()` (`OP-01`).** Reťaz validácií vstupu bez uloženého
   stavu: nemá zdrojový stav, o ktorom by politika rozhodovala, a súbeh jej
   výsledok nezmení (`REQ-02`).
-- **`_require_user()`, `_require_instrument()`, `_lock_reservation()`,
-  `_lock_instrument()`** — jednoriadkové načítania s jedným zamietnutím.
+- **Telo funkcií `_require_user()`, `_require_instrument()`,
+  `_lock_reservation()`, `_lock_instrument()`** — jednoriadkové načítania
+  s jedným zamietnutím. Návrhom je to, že existujú, kto ich smie volať a v akom
+  režime berú zámok (C05.3, C05.4); ako sú napísané, nie.
 - **Ako je tabuľka v politike zapísaná** (`match`, poradie vetiev). Záväzná
   je tabuľka, nie jej zápis.
 - **Vlastné rozhodnutie `Approval Workflow`** (`BR-07`, `INVALID_STATE` pre

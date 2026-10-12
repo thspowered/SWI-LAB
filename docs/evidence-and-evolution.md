@@ -447,7 +447,7 @@ volajúceho, nezapísaná úroveň izolácie) si vyžiadali aj zmenu kódu.
 | `_lock_reservation()` — zámok nad riadkom rezervácie (D-2) | `services/reservations.py` |
 | `_lock_instrument()` — zámok nad riadkom prístroja (D-1), režim `FOR NO KEY UPDATE` | `services/reservations.py` |
 | `enter_blocking_state()` — jediný vlastník `BR-02`; zámok nad prístrojom si berie sám | `services/reservations.py` |
-| `expire_request_if_dead()` — jediné miesto zápisu `EXPIRED` | `services/reservations.py` |
+| `expire_request_if_dead()` — jediné miesto zápisu `EXPIRED` *(od C05: `_write_expired()`)* | `services/reservations.py` |
 | úroveň izolácie `READ COMMITTED` nastavená výslovne | `db.py`, `tests/conftest.py` |
 | `confirm_reservation`, `cancel_reservation`, `decide_reservation` prepojené na zámky a na vlastníka invariantu | `services/reservations.py` |
 | zrušená mŕtva `rules.intervals_overlap()`, opravený komentár, ktorý o nej klamal | `domain/rules.py`, `services/reservations.py` |
@@ -692,28 +692,40 @@ merge commit po zlúčení do `main`.
 **Návrh:** [architecture-and-decisions.md](architecture-and-decisions.md),
 oddiel „C05 — Detailed Design"
 
-Práca prebehla v poradí, ktoré je vidno v histórii: **návrh** `9e066e6` →
-**testy** `3e095e1` (červené) → **implementácia** `11ade77` → tento záznam.
-Návrh aj testy vznikli pred zmenou kódu. Čo z návrhu kód z C03 už spĺňal
-a čo nie, rozlišuje porovnanie nižšie.
+Práca prebehla v poradí **návrh** `9e066e6` → **testy** `3e095e1` →
+**implementácia** `11ade77` → **evidence** `9e5fd9c` → **opravy po nezávislej
+kontrole** `2fefeee`.
+
+Commity vznikli v jednom pracovnom sedení krátko po sebe, s pomocou AI
+asistenta. História teda **nedokladá časový odstup** medzi návrhom a kódom.
+Dokladá stav repozitára v každom kroku, a ten sa dá overiť:
+
+- v commite `3e095e1` je `src/` zhodné s `main` — testy existujú, kód ešte nie;
+- návrh z `9e066e6` obsahuje vety, ktoré sa s výsledným kódom nezhodli a museli
+  sa opraviť (tabuľka nižšie) — spätný opis hotového kódu by ich neobsahoval;
+- nové testy správania prechádzajú aj nad **pôvodnou** službou z C03 (pokus
+  nižšie), takže neboli písané podľa novej implementácie.
+
+Čo z návrhu kód z C03 už spĺňal a čo nie, rozlišuje porovnanie nižšie.
 
 ### Tests derived from DD
 
 | DD element / decision | What must hold? | Test level | Test case |
 | --------------------- | --------------- | ---------- | --------- |
-| **interface contract** — Transition Policy (C05.4) | pre každý stav a čas vráti `Decision` iba v jednom zo štyroch tvarov; cieľ aj zamietnutie sú z množín, ktoré kontrakt vymenúva | unit | `test_policy_is_total_and_returns_only_shapes_from_the_contract`, `test_decision_refuses_a_shape_the_specification_does_not_know` |
-| **algorithm branch** — tabuľka `cancel_decision` (C05.8) | každý riadok tabuľky vrátane oboch hraníc na jeden tik (`60:00`, `starts_at`) | unit | `test_cancel_decision_table` (15 riadkov) |
+| **interface contract** — Transition Policy (C05.4) | pre každý stav a čas vráti `Decision` iba v jednom zo štyroch tvarov; cieľ aj zamietnutie sú z množín, ktoré kontrakt vymenúva; potvrdenie vráti vždy práve jedno; iný tvar sa nedá ani vytvoriť; všetky tri tabuľky čítajú stav rovnako | unit | `test_policy_is_total_and_returns_only_shapes_from_the_contract`, `test_decision_refuses_a_shape_the_specification_does_not_know`, `test_decision_accepts_exactly_the_four_shapes`, `test_all_three_tables_read_the_state_the_same_way` |
+| **algorithm branch** — tabuľka `cancel_decision` (C05.8) | každý riadok tabuľky vrátane oboch hraníc na jeden tik (`60:00`, `starts_at`); čas rozhoduje iba tam, kde tabuľka podmienku má | unit | `test_cancel_decision_table` (16 riadkov), `test_cancel_decision_depends_on_time_only_where_the_table_says_so` |
 | **state transition** — `confirm_decision` (`REQ-10`, `DD-7`) | `DRAFT → CONFIRMED` alebo `PENDING_APPROVAL` podľa prístroja; stav sa posudzuje pred časom | unit | `test_confirm_decision_table_for_draft`, `test_confirm_decision_judges_state_before_time` |
 | **algorithm branch** — `expiry_decision` | hranica `starts_at` je ostrá; vyprší iba `PENDING_APPROVAL`; zrušenie preberá ten istý riadok | unit | `test_expiry_decision_boundary`, `test_only_a_pending_request_expires`, `test_cancel_takes_its_expiry_row_from_expiry_decision` |
 | `DD-2` — tabuľka zrušenia bez predvoleného riadku | stav bez riadku je chyba programu | unit | `test_cancel_table_has_no_default_row` |
 | `DD-3` — blokujúci cieľ iba z potvrdenia | zrušenie ani vypršanie nikdy nevrátia blokujúci stav | unit | `test_only_confirm_ever_asks_for_a_blocking_state` |
-| **failure behavior** — `DD-4` | `EXPIRED` je commitnutý skôr, než operácia skončí zamietnutím — pri zrušení, schválení aj zamietnutí | component | `test_expiry_is_committed_before_the_operation_is_rejected` |
-| **collaboration** — `DD-1`, operácia ↔ politika | čo politika rozhodne, to operácia vykoná: cieľ je commitnutý, zamietnutie vyhodené, `changed` sedí | component | `test_cancel_carries_out_exactly_the_policy_decision`, `test_confirm_enters_exactly_the_state_the_policy_chose` |
-| **interface contract** — Invariant Guard (C05.4), `DD-6` | necommituje; zámok nad prístrojom drží do commitu volajúceho; pri `OVERLAP` nič nezmení; neblokujúci cieľ odmietne skôr, než siahne na databázu | component | `test_guard_writes_the_target_but_leaves_the_commit_to_the_caller`, `test_guard_holds_the_instrument_lock_until_the_callers_commit`, `test_guard_changes_nothing_when_it_rejects_overlap`, `test_guard_refuses_a_non_blocking_target_before_touching_the_database` |
-| **collaboration** — `DD-5` | `BR-05` pred `BR-04`, obe pred `BR-02` — rovnako pri potvrdení aj pri schválení | component | `test_allocation_preconditions_keep_one_order_on_both_paths` |
-| **failure behavior** — `DD-7`, poradie zamietnutí | neznámy žiadateľ → `UNKNOWN_USER`; oprávnenie pred stavom; rozhodnutie politiky pred predpokladmi alokácie | component | `test_unknown_requester_is_rejected_and_nothing_changes`, `test_authorization_is_judged_before_the_state`, `test_policy_rejection_comes_before_allocation_preconditions` |
+| **failure behavior** — `DD-4` | `EXPIRED` je commitnutý skôr, než operácia skončí zamietnutím — pri zrušení, schválení aj zamietnutí; živá žiadosť a iné stavy ostanú nedotknuté | component | `test_expiry_is_committed_before_the_operation_is_rejected`, `test_expire_request_if_dead_leaves_everything_else_alone` |
+| **collaboration** — `DD-1`, operácia ↔ politika | čo politika rozhodne, to operácia vykoná — aj presne na hraniciach `starts_at` a `60:00`: cieľ je commitnutý, zamietnutie vyhodené, `changed` sedí | component | `test_cancel_carries_out_exactly_the_policy_decision`, `test_confirm_enters_exactly_the_state_the_policy_chose` |
+| **failure behavior** — C05.8, cieľ, ktorý operácia nevie vykonať | `AssertionError` a nič zapísané — v zrušení, v potvrdení (ešte pred predpokladmi alokácie) aj vo vypršaní | component | `test_operation_refuses_a_decision_it_cannot_carry_out`, `test_expiry_refuses_a_decision_it_cannot_carry_out` |
+| **interface contract** — Invariant Guard (C05.4), `DD-6` | necommituje; zámok nad prístrojom drží do commitu volajúceho, a to v režime z ADR-01; pri `OVERLAP` nič nezmení; neblokujúci cieľ odmietne skôr, než si vezme zámok | component | `test_guard_writes_the_target_but_leaves_the_commit_to_the_caller`, `test_guard_holds_the_instrument_lock_until_the_callers_commit`, `test_guard_changes_nothing_when_it_rejects_overlap`, `test_guard_refuses_a_non_blocking_target_before_taking_the_lock` |
+| **collaboration** — `DD-5` | `BR-05` pred `BR-04`, obe pred `BR-02` — rovnako pri potvrdení aj pri schválení; zamietnutie na predpokladoch zámok nad prístrojom nevezme | component | `test_allocation_preconditions_keep_one_order_on_both_paths` |
+| **failure behavior** — `DD-7`, poradie zamietnutí | neznáma rezervácia pred neznámym žiadateľom; neznámy žiadateľ → `UNKNOWN_USER`; oprávnenie pred stavom; rozhodnutie politiky pred predpokladmi alokácie | component | `test_unknown_reservation_wins_over_unknown_requester`, `test_unknown_requester_is_rejected_and_nothing_changes`, `test_authorization_is_judged_before_the_state`, `test_policy_rejection_comes_before_allocation_preconditions` |
 | dve formy `BR-08` (politika a SQL) | na hranici `starts_at` odpovedajú rovnako | component | `test_liveness_in_the_overlap_query_agrees_with_the_policy` |
-| `DD-1`, `DD-4`, `DD-5` — kde čo smie byť | politika nepozná perzistenciu ani hodiny; časové pravidlá vyhodnocuje iba ona; jedna implementácia predpokladov alokácie; jeden zapisovateľ `EXPIRED` | statická (AST) | `test_politika_prechodov_nepozna_perzistenciu_ani_hodiny`, `test_casove_pravidla_prechodov_vyhodnocuje_iba_politika`, `test_predpoklady_alokacie_maju_jednu_implementaciu`, `test_expired_zapisuje_jedina_funkcia` |
+| `DD-1`, `DD-4`, `DD-5` — kde čo smie byť | import politiky nenačíta perzistenciu ani hodiny; pomenované časové pravidlá používa iba doména; operácie sa pýtajú politiky a čas neporovnávajú; politiku volá iba lifecycle; jedna implementácia predpokladov alokácie; jeden zapisovateľ `EXPIRED` | statická (AST, jeden import v čistom procese) | `test_politika_prechodov_nepozna_perzistenciu_ani_hodiny`, `test_casove_pravidla_prechodov_pouziva_iba_domena`, `test_operacie_rozhoduju_iba_cez_politiku`, `test_politiku_prechodov_vola_iba_reservation_lifecycle`, `test_predpoklady_alokacie_maju_jednu_implementaciu`, `test_expired_zapisuje_jedina_funkcia` |
 | čisté predikáty `domain/rules.py` | štyri hranice (`BR-01`, `BR-03`, `BR-04`, `BR-08`) sú ostré na jeden tik | unit | `test_rule_boundaries_are_strict` |
 
 Unit testy sú v `tests/test_transitions.py`, component testy
@@ -726,10 +738,10 @@ súboru `tests/test_architecture_conformance.py`.
 Test:            test_cancel_decision_table
 Selected level:  unit
 Why this level:  Rozhodnutie je čistá funkcia troch hodnôt. Databáza by
-                 k nemu nepridala nič okrem času a šumu, a hranica by sa
-                 nedala nastaviť presne: testy proti databáze z C02
-                 skúšajú 60:00 s krokom jednej sekundy, tento s krokom
-                 jednej mikrosekundy. Prejde aj so zastavenou databázou.
+                 k nemu nepridala nič okrem času behu: test nerobí jediný
+                 zápis, prejde aj so zastavenou databázou a celý súbor
+                 (92 testov vrátane hraníc na mikrosekundu) dobehne za
+                 niekoľko stotín sekundy.
 What design decision does this test verify?
                  DD-1 (rozhodnutie je oddelené od vykonania) a tabuľku
                  zrušenia z C05.8 riadok po riadku.
@@ -750,11 +762,11 @@ What design decision does this test verify?
 
 ```
 Test:            test_guard_holds_the_instrument_lock_until_the_callers_commit
-Selected level:  component — druhé spojenie skúša ten istý zámok s NOWAIT
+Selected level:  component — druhé spojenie skúša zámok s NOWAIT
 Why this level:  Zámok je vlastnosť databázovej transakcie, v procese
                  neexistuje. Testy súbehu z C03 ukazujú jeho DÔSLEDOK
                  a iba pravdepodobnostne (8 kôl); tento ukazuje MECHANIZMUS
-                 a deterministicky.
+                 a deterministicky — vrátane režimu zámku.
 What design decision does this test verify?
                  Kontrakt Invariant Guard a DD-6: kritická sekcia okolo
                  BR-02 trvá od vstupu do strážcu po commit volajúceho.
@@ -772,52 +784,81 @@ tests/test_architecture_conformance.py      6 failed, 5 passed
 zvyšok sady                                 95 passed
 ```
 
-**Po implementácii** (commit `11ade77`), `pytest -q` proti čistej databáze
-z `docker-compose.yml`:
+„Červený" stav dvoch nových súborov je teda chyba importu: dokladá, že modul
+neexistoval, nie to, že testy vedia zachytiť porušenie návrhu. To druhé
+dokladajú mutácie nižšie.
+
+**Po implementácii** (commit `11ade77`): `205 passed`.
+
+**Po opravách z nezávislej kontroly** (commit `2fefeee`), `pytest -q` proti
+čistej databáze z `docker-compose.yml`:
 
 ```
-205 passed in 1.77s
+249 passed in 2.24s
 ```
 
 Tri behy za sebou s rovnakým výsledkom. Z toho 102 testov spred C05 — **žiadny
 z nich sa nemenil**, v `test_architecture_conformance.py` iba pribudli dve
-mená do `ELEMENTS` — a 103 nových: 67 unit, 32 component, 4 statické.
+mená do `ELEMENTS` — a 147 nových: 92 unit, 49 component, 6 statických.
 
 | Overenie | Výsledok |
 | -------- | -------- |
-| unit a statické testy s **nedostupnou** databázou (`DATABASE_URL` na mŕtvy port) | `78 passed` — sú naozaj unit |
+| unit a statické testy s **nedostupnou** databázou (`DATABASE_URL` na mŕtvy port) | `105 passed` — databázu naozaj nepotrebujú |
 | component testy s nedostupnou databázou | chyba už vo fixture — databázu naozaj potrebujú |
-| `scripts/demo.py` proti bežiacej aplikácii | prebehlo celé, všetkých päť operácií |
+| `scripts/demo.py` proti bežiacej aplikácii | prebehlo celé, všetkých päť operácií, žiadna odpoveď 5xx |
 
-**Dôkaz, že testy nie sú vákuové.** Sedemnásť vložených chýb, každá ako
-jedna zmena nad kópiou `src/` mimo repozitára, vždy celá sada:
+**Dôkaz, že testy nie sú vákuové.** Tridsaťdva vložených chýb; každá je
+jedna zmena nad kópiou `src/` mimo repozitára a po nej celá sada. Dá sa
+zopakovať jedným príkazom:
 
-| Vložená chyba | Padne testov z C05 | Padne starších testov |
-| ------------- | ------------------ | --------------------- |
-| M1 `_write_expired()` necommituje | 4 | 3 |
-| M1b `_write_expired()` robí `flush()` namiesto `commit()` | 4 | **0** |
-| M2 hranica `60:00` neostrá (`<` → `<=`) | 2 unit | 1 |
-| M3 `enter_blocking_state()` commituje sám | 2 | **0** |
-| M4 `BR-04` pred `BR-05` | 2 | **0** |
-| M5 zrušenie vykoná rozhodnutie `EXPIRED` ako `CANCELLED` | 2 | 1 |
-| M6 `confirm_decision`: čas pred stavom | 10 unit | **0** |
-| M7 žiadosť žije aj v okamihu `starts_at` | 4 | 1 |
-| M8 strážca prijme neblokujúci cieľ | 1 | **0** |
-| M9 `Decision` prijme ľubovoľný tvar | 3 unit | **0** |
-| M10 `cancel_decision` s tichým predvoleným riadkom | 1 unit | **0** |
-| M11 potvrdenie rozhodne skôr, než overí oprávnenie | 1 | **0** |
-| S1 služba importuje časové pravidlo | 1 statický | **0** |
-| S2 druhý zapisovateľ `EXPIRED` | 1 statický | **0** |
-| S3 druhé vyhodnotenie `BR-04` v schvaľovaní | 1 statický | **0** |
-| S4 politika importuje `sqlalchemy` | 1 statický | **0** |
-| S5 politika číta hodiny namiesto `now` | 1 statický + 3 unit | **0** |
+```
+.venv/bin/python scripts/mutation_check.py
+```
 
-Všetkých sedemnásť chýb zachytí aspoň jeden test. Trinásť z nich zachytia
-**iba** testy odvodené z návrhu — sada spred C05 pri nich zostala zelená.
-Šesť z tých trinástich (M1b, M3, M4, M6, M8, M11) je chyba v správaní, ktoré
-existovalo už pred C05, takže sada z C03 by ju prepustila. Zvyšných sedem
-(M9, M10, S1–S5) sa týka štruktúry, ktorú zaviedol až návrh — staršie testy
-ju ani zachytiť nemohli.
+| # | Vložená chyba | Padne testov z C05 | Padne starších |
+| - | ------------- | ------------------ | -------------- |
+| M1 | `_write_expired()` necommituje | 5 | 3 |
+| M1b | `_write_expired()` robí `flush()` namiesto `commit()` | 5 | **0** |
+| M2 | hranica `60:00` neostrá (`<` → `<=`) | 2 | 1 |
+| M3 | `enter_blocking_state()` commituje sám | 2 | **0** |
+| M4 | `BR-04` pred `BR-05` | 2 | **0** |
+| M5 | zrušenie vykoná rozhodnutie `EXPIRED` ako `CANCELLED` | 3 | 1 |
+| M6 | `confirm_decision`: čas pred stavom | 10 | **0** |
+| M7 | žiadosť žije aj v okamihu `starts_at` | 4 | 1 |
+| M8 | strážca prijme neblokujúci cieľ | 1 | **0** |
+| M9 | `Decision` neoveruje tvar rozhodnutia | 6 | **0** |
+| M10 | `cancel_decision` s tichým predvoleným riadkom | 1 | **0** |
+| M11 | potvrdenie rozhodne skôr, než overí oprávnenie | 1 | **0** |
+| S1 | služba importuje časové pravidlo | 1 | **0** |
+| S2 | druhý zapisovateľ `EXPIRED` | 1 | **0** |
+| S3 | druhé vyhodnotenie `BR-04` v schvaľovaní | 1 | **0** |
+| S4 | politika importuje `sqlalchemy` | 1 | **0** |
+| S5 | politika číta hodiny namiesto `now` | 4 | **0** |
+| R1 | potvrdenie rozhoduje samo, mimo politiky, s hranicou o tik inde | 5 | **0** |
+| R2 | služba volá časové pravidlo cez atribút modulu | 1 | **0** |
+| R3 | politika importuje perzistenciu tvarom `from swilab import db` | 1 | **0** |
+| R4 | `cancel_decision`: `REJECTED` sa po termíne dá zrušiť | 2 | **0** |
+| R5 | `confirm_decision` vráti „úspech bez zmeny" tesne pred začiatkom | 3 | **0** |
+| R6 | druhá kópia `BR-05` v schvaľovaní | 1 | **0** |
+| R7a | zrušenie neznámy cieľ ticho ignoruje | 1 | **0** |
+| R7b | potvrdenie nechá neznámy cieľ na strážcu | 2 | **0** |
+| R7c | vypršanie neznámy cieľ ticho ignoruje | 1 | **0** |
+| R8a | zámok nad prístrojom je `FOR UPDATE` | 1 | **0** |
+| R8b | zámok nad prístrojom je `FOR SHARE` | 1 | 2 |
+| R9 | `expiry_decision` porovnáva stav identitou | 1 | **0** |
+| R10 | `Decision` prijme zamietnutie bez dôvodu | 2 | **0** |
+| R11 | `Approval Workflow` volá politiku priamo | 1 | **0** |
+| R12 | zrušenie porovnáva čas samo | 1 | **0** |
+
+`M` a `S` sú chyby, ktorými sme testy overili hneď po implementácii. `R` sú
+scenáre z nezávislej kontroly — obídenia, ktoré **pôvodné testy z C05
+prepustili**, a vetvy, ktoré nemali test; po opravách ich zachytia.
+
+Všetkých tridsaťdva chýb zachytí aspoň jeden test. Dvadsaťsedem z nich
+zachytia **iba** testy odvodené z návrhu. Desať z tých dvadsiatich siedmich
+(M1b, M3, M4, M6, M8, M11, S2, R1, R4, R8a) je chyba v správaní alebo pravidle,
+ktoré platilo už pred C05 — sada z C03 by ju prepustila. Zvyšných sedemnásť sa
+týka štruktúry, ktorú zaviedol až návrh.
 
 Pri M1 sme čakali, že staršie testy chýbajúci commit neuvidia, lebo stav
 čítajú cez `session.refresh()` v tej istej transakcii. Uvideli ho: `refresh()`
@@ -830,55 +871,120 @@ rozhodol: po zatvorení session by ho rollback zahodil.
 Návrh sme porovnali s kódom dvakrát: s kódom z C03 (čo z návrhu už platilo)
 a s výslednou implementáciou.
 
-Prvé porovnanie má vlastný pokus. Nové testy sme pustili proti **pôvodnej**
-službe z `main`, iba s doplneným modulom politiky:
+**1. Návrh ↔ kód z C03.** Nové testy sme pustili proti **pôvodnej** službe
+z `main`, iba s doplneným modulom politiky. S testami v stave commitu
+`11ade77`:
 
 ```
 5 failed, 105 passed
 ```
 
-Prešlo všetkých 32 component testov a 67 unit testov; padlo iba päť statických
-kontrol. Znamená to dve veci. Správanie, ktoré návrh popisuje — poradie
-zamietnutí, commit pred zamietnutím, kontrakt strážcu — kód z C03 **už mal**.
-A rozhodovacie tabuľky z C05.8 sú zhodné s pôvodnými reťazcami `if`:
+Prešlo všetkých 32 vtedajších component testov a 67 unit testov; padlo iba
+päť statických kontrol. S dnešnými testami je výsledok `11 failed, 143
+passed`: sedem statických kontrol a štyri testy, ktoré službe podvrhujú
+politiku — tú pôvodná služba nemá. Zvyšných 45 component testov vrátane
+riadkov na hraniciach nad ňou prechádza.
+
+Znamená to dve veci. Správanie, ktoré návrh popisuje — poradie zamietnutí,
+commit pred zamietnutím, kontrakt strážcu — kód z C03 **už mal**. A
+rozhodovacie tabuľky z C05.8 sú zhodné s pôvodnými reťazcami `if`:
 `test_cancel_carries_out_exactly_the_policy_decision` porovnáva výsledok
 služby s rozhodnutím politiky a prešiel nad starou službou pre každý riadok.
 Implementácia C05 je teda zmena **štruktúry**, nie správania.
 
+| DD decision | Platilo v kóde z C03? | Doklad | Čo z toho vyplynulo |
+| ----------- | --------------------- | ------ | ------------------- |
+| `DD-1` rozhodnutie oddelené od vykonania | NO | rozhodnutie v reťazcoch `if` troch funkcií; statické kontroly nad starou službou padajú | zmena kódu: `domain/transitions.py` |
+| `DD-2` totálna politika, zrušenie bez predvoleného riadku | NO | politika neexistovala; zrušenie malo na konci tichý predvolený zápis `CANCELLED` | zmena kódu |
+| `DD-3` blokujúci cieľ iba cez `enter_blocking_state()` | YES | kód strážcu sa od C03 nemenil; statické kontroly z C03 | nič — doplnený unit test |
+| `DD-4` jeden zapisovateľ `EXPIRED`, commit pred zamietnutím | YES | jedno miesto zápisu aj commit pred zamietnutím boli v `expire_request_if_dead()` | zápis sa oddelil od rozhodnutia ako dôsledok `DD-1` (`_write_expired()`) |
+| `DD-5` jedna implementácia predpokladov alokácie | PARTLY | dve kópie s rovnakým poradím — test správania prešiel, statická kontrola padla | zmena kódu: `_require_allocatable()` |
+| `DD-6` hranica transakcie patrí operácii | YES | kód sa nemenil; doteraz to neoveroval žiadny test | nič — doplnené testy |
+| `DD-7` poradie zamietnutí | YES | poradie sa nemenilo | nič — doplnené testy, aj pre `UNKNOWN_USER` pri `OP-03` (A3 ho označila ako chýbajúci) a rovnako pri `OP-04` |
+
+**2. Návrh ↔ výsledná implementácia.** Všetkých sedem rozhodnutí je
+implementovaných. Riadky pod nimi sú miesta, kde sa návrh a kód po
+implementácii rozišli — prvé tri sme našli sami, zvyšok nezávislá kontrola.
+
 | DD decision | Implemented? | Evidence | Action |
 | ----------- | ------------ | -------- | ------ |
-| `DD-1` rozhodnutie oddelené od vykonania | kód C03: **NO** → teraz **YES** | pred: rozhodnutie v reťazcoch `if` troch funkcií, statická kontrola nad starou službou padá; po: `domain/transitions.py`, `test_casove_pravidla_prechodov_vyhodnocuje_iba_politika` | update code |
-| `DD-2` totálna politika, zrušenie bez predvoleného riadku | **YES**; formulácia v návrhu **PARTLY** | `test_cancel_table_has_no_default_row`. Pôvodná veta tvrdila „stav bez riadku je chyba" pre celú politiku, hoci tabuľky potvrdenia a vypršania v tom istom návrhu riadok „každý iný" majú | **update DD** — veta zúžená na tabuľku zrušenia a zdôvodnená špecifikáciou; tabuľky ani kód sa nemenili |
-| `DD-3` blokujúci cieľ iba cez `enter_blocking_state()` | **YES** (od C03) | kód strážcu sa nemenil; statické kontroly z C03; `test_only_confirm_ever_asks_for_a_blocking_state` | keep |
-| `DD-4` jeden zapisovateľ `EXPIRED`, commit pred zamietnutím | **YES** (od C03) | jedno miesto zápisu aj commit pred zamietnutím platili už predtým, v `expire_request_if_dead()`. Zápis bol ale zrastený s rozhodnutím, či žiadosť vypršala; keď to rozhodnutie prešlo do politiky (`DD-1`), zapisovateľom sa stal `_write_expired()`. Stráži `test_expired_zapisuje_jedina_funkcia` | update code — dôsledok `DD-1`, nie medzera v `DD-4` |
-| `DD-5` jedna implementácia predpokladov alokácie | kód C03: **PARTLY** → teraz **YES** | pred: dve kópie s rovnakým poradím (test správania prešiel, statická kontrola padla); po: `_require_allocatable()` | update code |
-| `DD-6` hranica transakcie patrí operácii | **YES** (od C03) | kód sa nemenil; doteraz to neoveroval žiadny test, teraz `test_guard_writes_the_target_but_leaves_the_commit_to_the_caller` | keep, doplnené testy |
-| `DD-7` poradie zamietnutí | **YES** (od C03) | poradie sa nemenilo; doplnený test pre `UNKNOWN_USER` pri `OP-03` a `OP-04`, ktorý C03 časť A (A3) označila ako chýbajúci | keep, doplnené testy |
-| C05.8 „cieľ, ktorý operácia nepozná → `AssertionError`" | **PARTLY** | zrušenie má výslovnú vetvu; potvrdenie cieľ odovzdá strážcovi, ktorý neblokujúci stav odmietne cez `ValueError` | **update DD** — druhá výslovná vetva v potvrdení by zdvojila kontrolu, ktorú strážca už má v kontrakte a ktorá je testovaná |
-| C05.5 „do stavu zapisujú práve dva prvky", „`commit()` volá iba `LifecycleOperations`" | **NO** tak, ako bolo napísané | `decide_reservation()` zapisuje `REJECTED` a commituje vlastnú operáciu | **update DD** — obe vety platia vnútri jednotky; doplnené, že `Approval Workflow` je mimo nej |
-| C05.7 `confirm_reservation`: „pri každom zamietnutí zostáva `DRAFT`" | **NO** tak, ako bolo napísané | pri `INVALID_STATE` rezervácia v `DRAFT` nie je a zostáva vo svojom stave | **update DD** — „stav sa pri žiadnom zamietnutí nemení" |
+| `DD-1` … `DD-7` | YES | testy v tabuľke „Tests derived from DD"; `249 passed`; 32 mutácií | keep |
+| `DD-2`: „stav bez riadku je chyba programu" pre celú politiku | PARTLY | tabuľky potvrdenia a vypršania v tom istom návrhu riadok „každý iný" majú | update DD — veta zúžená na tabuľku zrušenia a zdôvodnená špecifikáciou |
+| C05.5: „do stavu zapisujú práve dva prvky", „`commit()` volá iba `LifecycleOperations`" | NO | `decide_reservation()` zapisuje `REJECTED` a commituje; `create_reservation()` zapisuje `DRAFT` | update DD — obe vety platia vnútri jednotky, výnimky sú pomenované |
+| C05.7 `confirm_reservation`: „pri každom zamietnutí zostáva `DRAFT`" | NO | pri `INVALID_STATE` rezervácia v `DRAFT` nie je | update DD |
+| C05.8: cieľ, ktorý **potvrdenie** nevie vykonať → `AssertionError` | PARTLY | cieľ išiel až do strážcu (`ValueError`), no až po predpokladoch alokácie — chybu programu mohlo prekryť bežné zamietnutie | **update code** — vlastná vetva hneď pri rozhodnutí. *Najprv sme tu opravili návrh; kontrola ukázala, že správny bol návrh.* |
+| C05.8: to isté pre **vypršanie** | NO | `expire_request_if_dead()` by ľubovoľný cieľ zapísal ako `EXPIRED` | update code |
+| C05.4: `Decision` tvar mimo tabuľky odmietne | PARTLY | overoval sa jeden smer — `Decision(target=EXPIRED)` bez zamietnutia prešiel | update code |
+| C05.4: tri tabuľky jednej politiky čítajú ten istý stav | PARTLY | `cancel_decision` porovnával hodnotou, ostatné identitou | update code |
+| C05.3: politika „v prvku `Domain Rules`" | NO | rozpor s C2 a G3: vlastníkom rozhodnutia o prechode (`O-1`) je lifecycle | update DD — politika je rozhodovacia časť lifecycle, fyzicky v `domain/`; G2 dorovnané; pribudol test, že ju volá iba lifecycle |
+| `DD-1` v docstringu služby: „živosť žiadosti si služba nevyhodnocuje" | PARTLY | druhá forma `BR-08` je v SQL dotaze na prekryv | update DD — docstring aj formulácie hovoria o prechode a o pomenovaných predikátoch |
+| C05.1: „hranice pravidiel sa dajú overiť iba proti databáze" | NO | predikáty `60:00` a živosti boli čisté funkcie už v C03 (hovorí to aj C2) | update DD |
+| C05.3: tri príliš silné bunky (L-1, L-2, L-3) | PARTLY | napr. „celá tabuľka prechodov" — schvaľovanie v nej nie je | update DD |
 
 ### Resolution
 
-**Zmeny kódu.** Dve rozhodnutia kód z C03 nespĺňal: `DD-1` — rozhodovanie
-sa presunulo do čistej politiky — a `DD-5` — dve kópie predpokladov alokácie
-sa spojili do jednej. Tretia zmena je dôsledok prvej: zápis `EXPIRED` sa
-oddelil od rozhodnutia, či žiadosť vypršala.
+**Zmeny kódu z návrhu.** Dve rozhodnutia kód z C03 nespĺňal: `DD-1` —
+rozhodovanie sa presunulo do čistej politiky (s ňou aj `DD-2`) — a `DD-5` —
+dve kópie predpokladov alokácie sa spojili do jednej. Zápis `EXPIRED` sa
+oddelil od rozhodnutia, či žiadosť vypršala, ako dôsledok prvého.
 
-**Štyri opravy návrhu.** Ani v jednom prípade sme návrh neprepísali podľa
-kódu len preto, že kód je hotový: vo všetkých štyroch bola nepresná **veta**
-v návrhu, nie zámer. Pri `DD-2` si veta protirečila s tabuľkami toho istého
-návrhu (opravená na dvoch miestach — v tabuľke rozhodnutí a v poznámke pod
-kontraktom politiky); pri C05.5 a C05.7 tvrdila viac, než platí; pri C05.8 by
-doslovné splnenie znamenalo druhú kontrolu toho, čo už stráži kontrakt
-strážcu. Rozhodovacie tabuľky z C05.8 ani predpoklady, postconditions
-a zlyhania kontraktov z C05.4 sa od commitu `9e066e6` nezmenili.
+**Štyri zmeny kódu po kontrole.** Vo všetkých štyroch mal pravdu návrh a kód
+ho nedržal: vetva pre neznámy cieľ v potvrdení a vo vypršaní, overenie tvaru
+`Decision` v oboch smeroch a jednotné porovnávanie stavu. Pri prvej sme
+pôvodne spravili opak — upravili sme vetu v návrhu, aby sedela s kódom.
+Kontrola ukázala konkrétnu chybu tej úvahy, a tak sa oprava presunula tam, kam
+patrila.
+
+**Opravy návrhu.** Ani v jednom prípade sme návrh neprepísali len preto, že
+kód je hotový: zakaždým bola nepresná **veta**, nie zámer — tvrdila viac, než
+platí, alebo si protirečila s inou časťou toho istého návrhu či s C03.
+Rozhodovacie tabuľky z C05.8 sa od commitu `9e066e6` nezmenili. Kontrakt
+politiky v C05.4 dostal štyri doplnené vety (potvrdenie vráti práve jedno;
+zamietnutie nesie dôvod; stav sa porovnáva hodnotou; tvar mimo tabuľky je
+`ValueError`) a jedna sa zúžila (`AssertionError` iba pri `cancel_decision`).
 
 **Jeden rozdiel viditeľný zvonka.** Text správy pri `MISSING_CERTIFICATION`
 v potvrdení je teraz „vlastnik rezervacie nema platny certifikat…" namiesto
 „pouzivatel nema…" — predtým mala každá z dvoch kópií vlastnú vetu. Kód
 zamietnutia aj HTTP status sú rovnaké; text správy návrh zámerne necháva na
-kód (C05.9).
+kód (C05.9) a žiadny test ho nestráži.
+
+### Nezávislá kontrola
+
+Pred review v tíme prešla vetva tromi nezávislými kontrolami. Robili ich AI
+agenti s čistým kontextom — nevideli, ako práca vznikala, iba repozitár
+a zadanie — a iba čítali.
+
+| Kontrola | Čo porovnávala | Výsledok |
+| -------- | -------------- | -------- |
+| zadanie ↔ odovzdanie | každú položku DoD a každý predpísaný formát zo zadania | žiadna položka nechýba; 5 stredných a 9 drobných nálezov |
+| návrh ↔ kód ↔ testy | každé tvrdenie návrhu a evidence proti kódu, testom a histórii | žiadne tvrdenie o správaní nie je nepravdivé; 5 stredných a 11 drobných, väčšinou príliš silné vety a neaktualizované miesta v C03 |
+| kód a testy | rozdiel oproti `main`, 12 294 porovnaných volaní starej a novej služby | správanie zhodné až na priznaný text správy; 6 stredných a 5 drobných — slabiny testov, nie kódu |
+
+Čo sa po nej zmenilo:
+
+- **kód** — štyri zmeny vymenované vyššie;
+- **testy** — hranice aj na úrovni služby; testy pre tri vetvy „cieľ, ktorý
+  operácia nevie vykonať"; režim zámku; statické kontroly prepísané tak, aby
+  ich neobišiel bežný zápis (import cez atribút, `from swilab import db`,
+  druhá kópia `BR-05`), a doplnené o tri nové pravidlá;
+- **návrh** — vlastníctvo politiky (`O-1` ostáva lifecycle), rozlíšenie nových
+  rozhodnutí od zámeru, ktorý kód už realizoval, tabuľka „Kde sa čo mení",
+  dve kostry vykonania namiesto jednej, anglické názvy sekcií zo zadania;
+- **C03** — poznámky v G2, G3, H2 a v delte, kde C05 zmenilo, čo tam stojí;
+- **evidence** — porovnanie rozdelené na dve tabuľky s hodnotami zo zadania,
+  mutácie opakovateľné skriptom, presnejšie zdôvodnenie úrovne.
+
+Čo sme **neprevzali** a prečo:
+
+- test na texty zamietnutí — návrh ich zámerne necháva na kód;
+- presun fixtures `now` a `tomorrow` do `conftest.py` — znamenal by zásah do
+  testov spred C05, ktoré sme nechceli meniť;
+- pomenovaný predikát pre `REQ-06` — porovnanie ostáva v politike, miesto je
+  uvedené v tabuľke „Kde sa čo mení";
+- `Instrument` v diagrame namiesto `Session` — dôvod je pod diagramom;
+- správa commitu `11ade77` uvádza 16 vložených chýb, hoci ich vtedy bolo 17
+  (M1b). Históriu neprepisujeme; správne čísla sú tu.
 
 ### Remaining design risk
 
@@ -890,22 +996,35 @@ kód (C05.9).
    a zápis `REJECTED` sú v `decide_reservation()`, nie v politike. Je to mimo
    vybranej jednotky; kým to tak je, časť stavového diagramu sa nedá overiť
    na úrovni unit.
-3. **Statické kontroly vidia mená, nie význam.** Keby niekto v službe
-   porovnal časy priamo (`now + timedelta(...) < starts_at`) namiesto volania
-   pomenovaného predikátu, `test_casove_pravidla_prechodov_vyhodnocuje_iba_politika`
-   to nezachytí.
+3. **Statické kontroly vidia mená, nie význam.** Po kontrole vidia aj prístup
+   cez atribút, celý `src/` a priame porovnanie času v operáciách. Stále
+   nevidia meno poskladané z reťazca (`getattr`), pravidlo prepísané v **novej**
+   funkcii, ktorú zoznamy v teste nepoznajú, ani logiku presunutú do SQL.
 4. **Test spolupráce berie očakávanie z politiky.** Overuje, že služba
    vykoná, čo politika rozhodla — nie, že politika rozhodla správne. To druhé
    držia unit testy tabuliek; jeden bez druhého nestačí.
-5. **Prístroj sa číta bez zámku skôr, než ho strážca zamkne.** Potvrdenie
-   si `requires_approval` a `is_active` prečíta pred vstupom do kritickej
-   sekcie. Dnes prístroj nemení žiadna operácia (`TBD-02`), takže to nemá
-   dôsledok; so správou prístrojov by súbežná deaktivácia nebola
-   s potvrdením serializovaná. Tak to bolo už po C03; C05 to nemení.
-6. **Riziká z C03 trvajú** — invariant drží dohoda v kóde, serializácia na
+5. **Čítanie bez zámku pred kritickou sekciou.** Potvrdenie aj schválenie
+   si príznaky prístroja (`requires_approval`, `is_active`) a certifikáty
+   prečítajú skôr, než strážca vezme zámok. Dnes ich nemení žiadna operácia
+   (`TBD-02`), takže to nemá dôsledok; so správou prístrojov a certifikátov by
+   ich súbežná zmena nebola s potvrdením serializovaná. Tak to bolo už po C03.
+6. **`_lock_reservation()` neobnoví objekt, ktorý session už drží.** Zámok
+   vezme, ale atribúty objektu z identity mapy neprepíše. V prevádzke je
+   session na request, takže rezerváciu vždy načíta čerstvú; v testoch so
+   zdieľanou session vidí politika objekt z pamäte. Platilo už po C03.
+7. **Tri vetvy `AssertionError` sú pre volajúceho HTTP 500.** Je to zámer —
+   ide o chybu programu, nie o business výsledok — a so súčasnou politikou ich
+   žiadny vstup nedosiahne. Keby sa to zmenilo, používateľ uvidí technickú
+   chybu, nie kód zamietnutia.
+8. **Mutačný skript je viazaný na presný text kódu.** Po zmene kódu skončí
+   chybou „mutácia sa nedá aplikovať" — nahlas, nie ticho — a treba ho
+   dorovnať. Je to doklad k tomuto stavu, nie trvalá súčasť testov.
+9. **Riziká z C03 trvajú** — invariant drží dohoda v kóde, serializácia na
    prístroj je nezmeraná a `REQ-16` si v baseline v0.2 protirečí s OP-04.
 
 **Commit/tag:** vetva `feature/c05-detailed-design` — návrh `9e066e6`, testy
-`3e095e1`, implementácia `11ade77`, evidence a opravy návrhu v nasledujúcom
-commite. Tag `c05-detailed-design` sa nastaví na merge commit po zlúčení do
+`3e095e1`, implementácia `11ade77`, evidence `9e5fd9c`, opravy po nezávislej
+kontrole `2fefeee` (kód a testy) a nasledujúci commit (dokumenty). Na vetve je
+navyše `80a60b6`, drobná oprava stavu baseline v špecifikácii, ktorá s C05
+nesúvisí. Tag `c05-detailed-design` sa nastaví na merge commit po zlúčení do
 `main`.

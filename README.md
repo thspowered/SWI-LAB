@@ -191,12 +191,15 @@ Tri medzery prenesené z C02 (`REQ-05` v oboch vetvách, `REQ-16`) sú
 - [x] detailed sequence — `Cancel Reservation`
 - [x] významné methods / operations
 - [x] algorithm / decision logic — rozhodovacie tabuľky zrušenia, potvrdenia a vypršania
-- [x] minimálne 5 testov odvodených z DD — 67 unit, 32 component, 4 statické
-- [x] testy spustené — `205 passed`; 17 vložených chýb, každú zachytí aspoň jeden test
-- [x] DD porovnané s implementáciou — 2 rozhodnutia si vyžiadali zmenu kódu, 4 formulácie opravu návrhu
-- [x] commity v poradí návrh → testy → implementácia → evidence; tag `c05-detailed-design` po zlúčení
+- [x] minimálne 5 testov odvodených z DD — 92 unit, 49 component, 6 statických
+- [x] testy spustené — `249 passed`; 32 vložených chýb, každú zachytí aspoň jeden test (`scripts/mutation_check.py`)
+- [x] DD porovnané s implementáciou — s kódom z C03 aj s výsledkom; rozdiely a ich riešenie sú v evidence
+- [x] commity v poradí návrh → testy → implementácia → evidence → opravy po kontrole
+- [ ] tag `c05-detailed-design` — nastaví sa na merge commit po zlúčení
 
-Správanie baseline v0.2 sa v C05 nemenilo — mení sa vnútro jednej jednotky.
+Stavy, kódy zamietnutí ani HTTP statusy sa v C05 nemenili — mení sa vnútro
+jednej jednotky. Pred review v tíme prešla vetva tromi nezávislými kontrolami;
+čo našli a čo sa po nich zmenilo, je v evidence.
 
 ## Dokumentácia
 
