@@ -11,7 +11,7 @@ vyžadujú.
 Vizuálne pohľady na to isté správanie — diagram prípadov užitia, stavový diagram
 a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
 
-**Stav:** návrh v0.2 — čaká na schválenie tímom.
+**Stav:** baseline v0.2 — schválená tímom 2026-10-04 (časť 11).
 
 **História verzií**
 
@@ -1127,7 +1127,7 @@ Pri v0.2 revízia zmenila toto:
 
 ## 11. Schválenie baseline
 
-Špecifikácia je pripravená na schválenie tímom. Platí, že **schválená baseline
+Obe baseline sú schválené tímom. Platí, že **schválená baseline
 znamená, že obaja členovia tímu vedia každú požiadavku obhájiť** — nie že si
 dokument prečítali.
 

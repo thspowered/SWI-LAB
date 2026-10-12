@@ -181,11 +181,31 @@ zámerne nesplnené a boli vstupom pre C03 — tam sú zatvorené, viď nižšie
 Tri medzery prenesené z C02 (`REQ-05` v oboch vetvách, `REQ-16`) sú
 **zatvorené** — testy už nie sú `xfail`.
 
+## C05 Definition of Done
+
+- [x] jedna architecture responsibility / unit — `Reservation Lifecycle`
+- [x] detailed responsibilities (L-1..L-7)
+- [x] ownership — návrhové prvky a rozhodnutia DD-1..DD-7
+- [x] významné interface / contract — Transition Policy, `enter_blocking_state()`
+- [x] focused structural UML view
+- [x] detailed sequence — `Cancel Reservation`
+- [x] významné methods / operations
+- [x] algorithm / decision logic — rozhodovacie tabuľky zrušenia, potvrdenia a vypršania
+- [x] minimálne 5 testov odvodených z DD — 92 unit, 49 component, 6 statických
+- [x] testy spustené — `249 passed`; 32 vložených chýb, každú zachytí aspoň jeden test (`scripts/mutation_check.py`)
+- [x] DD porovnané s implementáciou — s kódom z C03 aj s výsledkom; rozdiely a ich riešenie sú v evidence
+- [x] commity v poradí návrh → testy → implementácia → evidence → opravy po kontrole
+- [ ] tag `c05-detailed-design` — nastaví sa na merge commit po zlúčení
+
+Stavy, kódy zamietnutí ani HTTP statusy sa v C05 nemenili — mení sa vnútro
+jednej jednotky. Pred review v tíme prešla vetva tromi nezávislými kontrolami;
+čo našli a čo sa po nich zmenilo, je v evidence.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
 - [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
-- [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02
+- [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia, architektúra C03 (ADR-01), detailed design C05
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03 a C05
