@@ -26,6 +26,7 @@ from sqlalchemy.exc import OperationalError
 
 from swilab.domain.states import ReservationState, UserRole
 from swilab.domain.transitions import (
+    Decision,
     cancel_decision,
     confirm_decision,
     expiry_decision,
@@ -36,6 +37,7 @@ from swilab.services import reservations as service
 
 S = ReservationState
 
+ZERO = timedelta(0)
 HOUR = timedelta(hours=1)
 MINUTE = timedelta(minutes=1)
 TICK = timedelta(microseconds=1)
@@ -67,15 +69,20 @@ def _outcome(operation) -> ErrorCode | None:
     return None
 
 
-def _instrument_lock_is_free(engine, instrument_id) -> bool:
-    """Skusi vziat zamok straznika invariantu z INEHO spojenia, bez cakania."""
+#: Rezim, v ktorom zamok nad pristrojom berie straznik invariantu (ADR-01).
+GUARD_LOCK = "FOR NO KEY UPDATE"
+
+
+def _can_lock_instrument(engine, instrument_id, mode: str = GUARD_LOCK) -> bool:
+    """Skusi vziat zamok nad riadkom pristroja z INEHO spojenia, bez cakania.
+
+    Predvoleny rezim je ten, ktory berie straznik - odpoved teda hovori,
+    ci by druhy straznik musel cakat.
+    """
     with engine.connect() as other:
         try:
             other.execute(
-                text(
-                    "SELECT id FROM instruments WHERE id = :id "
-                    "FOR NO KEY UPDATE NOWAIT"
-                ),
+                text(f"SELECT id FROM instruments WHERE id = :id {mode} NOWAIT"),
                 {"id": instrument_id},
             )
         except OperationalError as exc:
@@ -96,11 +103,16 @@ def _instrument_lock_is_free(engine, instrument_id) -> bool:
     [
         (S.DRAFT, HOUR),
         (S.PENDING_APPROVAL, HOUR),
+        (S.PENDING_APPROVAL, TICK),
+        (S.PENDING_APPROVAL, ZERO),
         (S.PENDING_APPROVAL, -HOUR),
         (S.CONFIRMED, 2 * HOUR),
+        (S.CONFIRMED, HOUR + TICK),
+        (S.CONFIRMED, HOUR),
         (S.CONFIRMED, 30 * MINUTE),
         (S.CANCELLED, HOUR),
         (S.REJECTED, HOUR),
+        (S.REJECTED, -HOUR),
         (S.EXPIRED, -HOUR),
     ],
 )
@@ -109,7 +121,12 @@ def test_cancel_carries_out_exactly_the_policy_decision(
 ):
     """Kazdy riadok tabulky zrusenia: co politika rozhodne, to operacia
     vykona - cielovy stav je commitnuty, zamietnutie vyhodene, `changed`
-    hovori, ci sa stav zmenil. Ziadne druhe rozhodovanie v sluzbe."""
+    hovori, ci sa stav zmenil. Ziadne druhe rozhodovanie v sluzbe.
+
+    Riadky na hraniciach (starts_at, 60:00) su tu zamerne: sluzba, ktora
+    by si cas porovnala sama a o tik inak, sa od politiky odlisi prave na
+    nich. Ocakavanie je z politiky - ci rozhodla SPRAVNE, overuje
+    test_transitions.py."""
     owner = make_user()
     starts_at = now + lead
     reservation = make_reservation(
@@ -136,6 +153,8 @@ def test_cancel_carries_out_exactly_the_policy_decision(
     [
         (S.DRAFT, HOUR, False),
         (S.DRAFT, HOUR, True),
+        (S.DRAFT, TICK, False),
+        (S.DRAFT, ZERO, False),
         (S.DRAFT, -HOUR, False),
         (S.CONFIRMED, HOUR, False),
         (S.PENDING_APPROVAL, HOUR, True),
@@ -175,6 +194,52 @@ def test_confirm_enters_exactly_the_state_the_policy_chose(
 
     assert outcome == decision.rejection
     assert _persisted_state(new_session, reservation.id) is (decision.target or state)
+
+
+@pytest.mark.parametrize(
+    ("operation", "policy", "decision"),
+    [
+        ("cancel_reservation", "cancel_decision", Decision(target=S.CONFIRMED)),
+        ("confirm_reservation", "confirm_decision", Decision(target=S.CANCELLED)),
+        ("confirm_reservation", "confirm_decision", Decision()),
+    ],
+)
+def test_operation_refuses_a_decision_it_cannot_carry_out(
+    session, new_session, monkeypatch, draft, now, operation, policy, decision
+):
+    """C05.8: ked politika vrati ciel, ktory operacia nevie vykonat, je to
+    chyba programu - AssertionError, nie tichy uspech bez zapisu. Dnes
+    taky ciel ziadny vstup nevyrobi; test preto politiku podvrhne.
+
+    Potvrdenie to musi zistit HNED pri rozhodnuti, este pred predpokladmi
+    alokacie: tento DRAFT nema certifikat, takze neskorsia kontrola by
+    chybu programu prekryla beznym MISSING_CERTIFICATION."""
+    monkeypatch.setattr(service, policy, lambda *args, **kwargs: decision)
+
+    with pytest.raises(AssertionError):
+        getattr(service, operation)(
+            session, reservation_id=draft.id, requested_by=draft.user_id, now=now
+        )
+
+    session.commit()
+    assert _persisted_state(new_session, draft.id) is S.DRAFT
+
+
+def test_expiry_refuses_a_decision_it_cannot_carry_out(
+    session, new_session, monkeypatch, draft, now
+):
+    """To iste pre tretieho vykonavatela: expire_request_if_dead() vie
+    zapisat iba EXPIRED. Iny ciel nesmie potichu zapisat ako vyprsanie."""
+    monkeypatch.setattr(
+        service, "expiry_decision", lambda *args: Decision(target=S.CANCELLED)
+    )
+    reservation = service._lock_reservation(session, draft.id)
+
+    with pytest.raises(AssertionError):
+        service.expire_request_if_dead(session, reservation=reservation, now=now)
+
+    session.commit()
+    assert _persisted_state(new_session, draft.id) is S.DRAFT
 
 
 # =========================================================================
@@ -218,6 +283,28 @@ def test_expiry_is_committed_before_the_operation_is_rejected(
     assert _persisted_state(new_session, request.id) is S.EXPIRED
 
 
+@pytest.mark.parametrize(
+    ("state", "lead"),
+    [(S.PENDING_APPROVAL, HOUR), (S.PENDING_APPROVAL, TICK), (S.DRAFT, -HOUR), (S.CONFIRMED, -HOUR)],
+)
+def test_expire_request_if_dead_leaves_everything_else_alone(
+    session, new_session, make_instrument, make_user, make_reservation, now, state, lead
+):
+    """Rozhranie pre Approval Workflow (C05.7): ziva ziadost a kazdy iny
+    stav - nic sa nezapise a operacia pokracuje. DRAFT nevyprsi ani po
+    svojom zaciatku (N-05)."""
+    starts_at = now + lead
+    reservation = make_reservation(
+        make_instrument(), make_user(), starts_at, starts_at + HOUR, state=state
+    )
+    locked = service._lock_reservation(session, reservation.id)
+
+    assert service.expire_request_if_dead(session, reservation=locked, now=now) is None
+
+    session.commit()
+    assert _persisted_state(new_session, reservation.id) is state
+
+
 # =========================================================================
 # Kontrakt straznika invariantu - enter_blocking_state() (C05.4, DD-3, DD-6)
 # =========================================================================
@@ -254,15 +341,20 @@ def test_guard_holds_the_instrument_lock_until_the_callers_commit(
     po commit VOLAJUCEHO. Testy subehu to dokladaju pravdepodobnostne
     (8 kol); tento test deterministicky."""
     reservation = service._lock_reservation(session, draft.id)
-    assert _instrument_lock_is_free(engine, draft.instrument_id)
+    assert _can_lock_instrument(engine, draft.instrument_id)
 
     service.enter_blocking_state(
         session, reservation=reservation, target_state=S.CONFIRMED, now=now
     )
 
-    assert not _instrument_lock_is_free(engine, draft.instrument_id)
+    assert not _can_lock_instrument(engine, draft.instrument_id)
+    # Rezim zamku je sucast ADR-01, nie detail: slabsi by dve potvrdenia
+    # nevylucil (REQ-05), silnejsi by blokoval vytvaranie DRAFT, ktoreho
+    # kontrola cudzieho kluca si berie FOR KEY SHARE.
+    assert not _can_lock_instrument(engine, draft.instrument_id, "FOR SHARE")
+    assert _can_lock_instrument(engine, draft.instrument_id, "FOR KEY SHARE")
     session.commit()
-    assert _instrument_lock_is_free(engine, draft.instrument_id)
+    assert _can_lock_instrument(engine, draft.instrument_id)
 
 
 def test_guard_changes_nothing_when_it_rejects_overlap(
@@ -285,7 +377,7 @@ def test_guard_changes_nothing_when_it_rejects_overlap(
     assert _persisted_state(new_session, draft.id) is S.DRAFT
 
 
-def test_guard_refuses_a_non_blocking_target_before_touching_the_database(
+def test_guard_refuses_a_non_blocking_target_before_taking_the_lock(
     session, engine, draft, now
 ):
     """Kontrakt: neblokujuci ciel je chyba programu, nie business
@@ -298,7 +390,7 @@ def test_guard_refuses_a_non_blocking_target_before_touching_the_database(
         )
 
     assert reservation.state is S.DRAFT
-    assert _instrument_lock_is_free(engine, draft.instrument_id)
+    assert _can_lock_instrument(engine, draft.instrument_id)
 
 
 # =========================================================================
@@ -310,6 +402,7 @@ def test_guard_refuses_a_non_blocking_target_before_touching_the_database(
 def test_allocation_preconditions_keep_one_order_on_both_paths(
     session,
     new_session,
+    engine,
     make_instrument,
     make_user,
     make_certification,
@@ -346,13 +439,19 @@ def test_allocation_preconditions_keep_one_order_on_both_paths(
 
     # Neplati nic: pristroj v servise, ziadny certifikat, prekryv.
     assert attempt() is ErrorCode.INSTRUMENT_INACTIVE
+    # Predpoklady sa overuju PRED vstupom do kritickej sekcie: zamietnutie
+    # na nich zamok nad pristrojom nikdy nevzalo.
+    assert _can_lock_instrument(engine, instrument.id)
 
     instrument.is_active = True
     session.commit()
     assert attempt() is ErrorCode.MISSING_CERTIFICATION
+    assert _can_lock_instrument(engine, instrument.id)
 
     make_certification(owner, instrument.category, ends_at + HOUR)
     assert attempt() is ErrorCode.OVERLAP
+    # BR-02 uz rozhodol straznik - pod zamkom, ktory drzi do konca transakcie.
+    assert not _can_lock_instrument(engine, instrument.id)
 
     session.commit()
     assert _persisted_state(new_session, reservation.id) is source
@@ -378,6 +477,19 @@ def test_unknown_requester_is_rejected_and_nothing_changes(
     assert outcome is ErrorCode.UNKNOWN_USER
     session.commit()
     assert _persisted_state(new_session, draft.id) is S.DRAFT
+
+
+@pytest.mark.parametrize("operation", ["confirm_reservation", "cancel_reservation"])
+def test_unknown_reservation_wins_over_unknown_requester(session, now, operation):
+    """Prvy clanok poradia: o rezervacii, ktora neexistuje, sa neda povedat
+    ani to, kto na nu nema pravo."""
+    outcome = _outcome(
+        lambda: getattr(service, operation)(
+            session, reservation_id=uuid.uuid4(), requested_by=uuid.uuid4(), now=now
+        )
+    )
+
+    assert outcome is ErrorCode.NOT_FOUND
 
 
 @pytest.mark.parametrize(

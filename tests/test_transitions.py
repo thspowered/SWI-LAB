@@ -37,6 +37,9 @@ TICK = timedelta(microseconds=1)
 #: zavisiet od skutocnych hodin.
 NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
 
+#: Casy okolo oboch hranic (starts_at a 60:00) aj daleko od nich.
+LEADS = [-HOUR, ZERO, TICK, 30 * MINUTE, HOUR, HOUR + TICK, 24 * HOUR]
+
 
 def _starts(lead: timedelta) -> datetime:
     """starts_at rezervacie, ktora zacina o `lead` od NOW (zaporne = uz zacala)."""
@@ -64,6 +67,7 @@ def _starts(lead: timedelta) -> datetime:
         (S.CANCELLED, HOUR, None, None, "REQ-09"),
         (S.CANCELLED, -HOUR, None, None, "REQ-09 neplati iba pred zaciatkom"),
         (S.REJECTED, HOUR, None, ErrorCode.INVALID_STATE, "REQ-14"),
+        (S.REJECTED, -HOUR, None, ErrorCode.INVALID_STATE, "REQ-14 plati aj po termine"),
         (S.EXPIRED, HOUR, None, ErrorCode.INVALID_STATE, "REQ-14"),
         (S.EXPIRED, -HOUR, None, ErrorCode.INVALID_STATE, "zapisany EXPIRED nie je 'prave vyprsala'"),
     ],
@@ -72,6 +76,21 @@ def test_cancel_decision_table(state, lead, target, rejection, case):
     decision = cancel_decision(state, _starts(lead), NOW)
 
     assert (decision.target, decision.rejection) == (target, rejection), case
+
+
+@pytest.mark.parametrize("state", [S.DRAFT, S.CANCELLED, S.REJECTED, S.EXPIRED])
+def test_cancel_decision_depends_on_time_only_where_the_table_says_so(state):
+    """BR-03: casovu podmienku maju iba CONFIRMED a PENDING_APPROVAL. Pre
+    ostatne stavy je rozhodnutie rovnake pred zaciatkom, na hranici aj po
+    nom - tabulka pri nich ziadnu podmienku nema."""
+    decisions = {
+        (decision.target, decision.rejection)
+        for decision in (
+            cancel_decision(state, _starts(lead), NOW) for lead in LEADS
+        )
+    }
+
+    assert len(decisions) == 1, decisions
 
 
 @pytest.mark.parametrize(
@@ -142,9 +161,6 @@ def test_cancel_takes_its_expiry_row_from_expiry_decision(lead):
 # Kontrakt Transition Policy (C05.4)
 # =========================================================================
 
-#: Casy okolo oboch hranic (starts_at a 60:00) aj daleko od nich.
-LEADS = [-HOUR, ZERO, TICK, 30 * MINUTE, HOUR, HOUR + TICK, 24 * HOUR]
-
 #: Co smie ktora funkcia vratit: (ciele, zamietnutia).
 CONTRACT = {
     "confirm": (
@@ -186,6 +202,9 @@ def test_policy_is_total_and_returns_only_shapes_from_the_contract():
             assert decision.reason, f"{where}: zamietnutie bez dovodu"
             # Zmena stavu spolu so zamietnutim existuje iba ako vyprsanie.
             assert decision.target in (None, S.EXPIRED), where
+        if name == "confirm":
+            # Potvrdenie "uspech bez zmeny" nepozna: vzdy prave jedno.
+            assert (decision.target is None) != (decision.rejection is None), where
         checked += 1
 
     assert checked == len(S) * len(LEADS) * 4, "kontrola presla naprazdno"
@@ -208,27 +227,63 @@ def test_cancel_table_has_no_default_row():
 
 
 @pytest.mark.parametrize(
-    ("target", "rejection"),
+    ("target", "rejection", "reason", "case"),
     [
-        (S.CANCELLED, ErrorCode.TOO_LATE),
-        (S.EXPIRED, ErrorCode.INVALID_STATE),
-        (S.CONFIRMED, ErrorCode.EXPIRED),
+        (S.CANCELLED, ErrorCode.TOO_LATE, "x", "zmena + zamietnutie mimo vyprsania"),
+        (S.CONFIRMED, ErrorCode.EXPIRED, "x", "zmena + zamietnutie mimo vyprsania"),
+        (S.EXPIRED, ErrorCode.INVALID_STATE, "x", "vyprsanie s inym kodom"),
+        (S.EXPIRED, None, None, "EXPIRED zapisany bez zamietnutia"),
+        (None, ErrorCode.EXPIRED, "x", "kod EXPIRED bez zapisu stavu"),
+        (None, ErrorCode.TOO_LATE, None, "zamietnutie bez dovodu"),
+        (S.CANCELLED, None, "x", "dovod bez zamietnutia"),
+        ("EXPIRED", "EXPIRED", "x", "retazce namiesto clenov enumu"),
     ],
 )
-def test_decision_refuses_a_shape_the_specification_does_not_know(target, rejection):
+def test_decision_refuses_a_shape_the_specification_does_not_know(
+    target, rejection, reason, case
+):
     """Kontrakt: 'stav sa zmeni A operacia sa zamietne' smie existovat iba
-    ako EXPIRED / EXPIRED (N-04, REQ-15). Ine take rozhodnutie sa neda ani
+    ako EXPIRED / EXPIRED (N-04, REQ-15) - a vyprsanie zasa iba ako oboje
+    naraz. Zamietnutie vzdy nesie dovod. Ine rozhodnutie sa neda ani
     vytvorit."""
     with pytest.raises(ValueError):
-        Decision(target=target, rejection=rejection, reason="vymyslene")
+        Decision(target=target, rejection=rejection, reason=reason)
 
 
-def test_decision_accepts_the_one_shape_that_changes_state_and_rejects():
-    decision = Decision(
-        target=S.EXPIRED, rejection=ErrorCode.EXPIRED, reason="ziadost vyprsala"
+@pytest.mark.parametrize(
+    ("target", "rejection", "reason"),
+    [
+        (S.CANCELLED, None, None),
+        (None, None, None),
+        (None, ErrorCode.TOO_LATE, "neskoro"),
+        (S.EXPIRED, ErrorCode.EXPIRED, "ziadost vyprsala"),
+    ],
+)
+def test_decision_accepts_exactly_the_four_shapes(target, rejection, reason):
+    """Protivaha k testu vyssie: styri tvary z kontraktu sa vytvorit daju."""
+    decision = Decision(target=target, rejection=rejection, reason=reason)
+
+    assert (decision.target, decision.rejection) == (target, rejection)
+
+
+@pytest.mark.parametrize("state", list(S))
+@pytest.mark.parametrize("lead", [HOUR, -HOUR])
+def test_all_three_tables_read_the_state_the_same_way(state, lead):
+    """ReservationState je StrEnum a `match` v cancel_decision porovnava
+    hodnotou. Keby expiry_decision alebo confirm_decision porovnavali
+    identitou, ten isty vstup by v dvoch tabulkach znamenal dva rozne
+    stavy - a zrusenie by pre neho vynechalo riadok vyprsania."""
+    starts_at = _starts(lead)
+
+    assert cancel_decision(state.value, starts_at, NOW) == cancel_decision(
+        state, starts_at, NOW
     )
-
-    assert (decision.target, decision.rejection) == (S.EXPIRED, ErrorCode.EXPIRED)
+    assert expiry_decision(state.value, starts_at, NOW) == expiry_decision(
+        state, starts_at, NOW
+    )
+    assert confirm_decision(
+        state.value, starts_at, NOW, requires_approval=False
+    ) == confirm_decision(state, starts_at, NOW, requires_approval=False)
 
 
 # =========================================================================

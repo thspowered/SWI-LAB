@@ -3,7 +3,8 @@
 Jedna funkcia = jedna operacia (OP-01 az OP-05). Poradie kontrol v kazdej
 funkcii sedi s diagramom aktivit v docs/diagrams.md; ked sa poradie zmeni
 tam, musi sa zmenit aj tu, inak bude aplikacia vracat iny kod chyby, nez
-hovori specifikacia.
+hovori specifikacia. Od C05 lezi cast toho poradia - stav a cas pri
+potvrdeni a zruseni - v swilab/domain/transitions.py.
 
 Struktura podla C03 (docs/architecture-and-decisions.md, G2 a ADR-01).
 Logicke prvky architektury su FUNKCIE tohto modulu, nie samostatne subory:
@@ -20,8 +21,10 @@ tests/test_architecture_conformance.py.
 
 Vnutro Reservation Lifecycle podla C05 (ten isty dokument, C05.3):
 o prechode ROZHODUJE cista politika swilab/domain/transitions.py,
-funkcie tu rozhodnutie VYKONAVAJU - zamok, zapis, commit. Lehotu ani
-zivost ziadosti si sluzba sama nevyhodnocuje.
+funkcie tu rozhodnutie VYKONAVAJU - zamok, zapis, commit. Lehotu (BR-03)
+ani zivost ziadosti pre PRECHOD si sluzba sama nevyhodnocuje. Druha forma
+BR-08 ostava v SQL dotaze na prekryv (_overlapping_blocking) - tam nejde
+o prechod, ale o to, ci cudzia ziadost blokuje.
 """
 
 import uuid
@@ -273,10 +276,16 @@ def expire_request_if_dead(
     sa zamietne; pre ine stavy nez PENDING_APPROVAL sa nedeje nic (N-05).
     """
     decision = expiry_decision(reservation.state, reservation.starts_at, now)
-    if decision.target is None:
-        return
-    _write_expired(session, reservation)
-    raise DomainError(decision.rejection, decision.reason)
+    match decision.target:
+        case None:
+            return
+        case ReservationState.EXPIRED:
+            _write_expired(session, reservation)
+            raise DomainError(decision.rejection, decision.reason)
+        case _:
+            raise AssertionError(
+                f"vyprsanie nevie vykonat prechod do {decision.target}"
+            )
 
 
 def create_reservation(
@@ -409,6 +418,15 @@ def confirm_reservation(
     )
     if decision.rejection is not None:
         raise DomainError(decision.rejection, decision.reason)
+    if decision.target not in BLOCKING_STATES:
+        # Politika vratila ciel, ktory potvrdenie nevie vykonat. Potvrdenie
+        # bud poziada o blokujuci stav, alebo sa zamietne - "uspech bez
+        # zmeny" nepozna. Kontrola je TU, hned pri rozhodnuti: strazca by
+        # to iste odmietol tiez, ale az po predpokladoch alokacie, ktore by
+        # chybu programu mohli prekryt beznym zamietnutim.
+        raise AssertionError(
+            f"potvrdenie nevie vykonat prechod do {decision.target}"
+        )
 
     _require_allocatable(session, reservation=reservation, instrument=instrument)
     enter_blocking_state(

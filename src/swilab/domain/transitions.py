@@ -26,12 +26,15 @@ class Decision:
 
     Styri tvary (C05.4):
       target, bez rejection   prechod - operacia uspeje a stav sa zmeni
-      nic                     uspech bez zmeny stavu (REQ-09)
+      nic                     nic sa nemeni: pri zruseni uspech bez zmeny
+                              (REQ-09), pri vyprsani "ziadost zije, pokracuj"
       rejection, bez target   zamietnutie, stav sa nemeni
       EXPIRED + EXPIRED       stav sa zmeni A operacia sa zamietne (N-04)
 
     Blokujuci `target` nie je pokyn "zapis". Znamena "poziadaj o vstup do
     tohto stavu" - este ho cakaju predpoklady alokacie a BR-02.
+
+    Tvar, ktory specifikacia nepozna, sa neda ani vytvorit (ValueError).
     """
 
     target: ReservationState | None = None
@@ -40,16 +43,18 @@ class Decision:
 
     def __post_init__(self) -> None:
         # Zmenu stavu spolu so zamietnutim pozna specifikacia iba ako
-        # vyprsanie. Ine take rozhodnutie sa nesmie dat ani vytvorit.
+        # vyprsanie - a vyprsanie vzdy ako oboje naraz: EXPIRED sa nezapise
+        # bez zamietnutia a kod EXPIRED sa nevrati bez zapisu.
+        expires = self.target is ReservationState.EXPIRED
         changes_and_rejects = self.target is not None and self.rejection is not None
-        is_expiry = (self.target, self.rejection) == (
-            ReservationState.EXPIRED,
-            ErrorCode.EXPIRED,
-        )
-        if changes_and_rejects and not is_expiry:
+        if expires != (self.rejection is ErrorCode.EXPIRED) or (
+            changes_and_rejects and not expires
+        ):
             raise ValueError(
                 f"rozhodnutie {self.target} + {self.rejection} specifikacia nepozna"
             )
+        if (self.rejection is None) != (self.reason is None):
+            raise ValueError("zamietnutie a jeho dovod idu vzdy spolu")
 
 
 def expiry_decision(
@@ -61,7 +66,10 @@ def expiry_decision(
     aj OP-05. Tyka sa IBA stavu PENDING_APPROVAL; DRAFT nevyprsi, lebo
     nikoho neblokuje (N-05).
     """
-    if state is ReservationState.PENDING_APPROVAL and not approval_request_is_alive(
+    # Stav sa vo vsetkych troch funkciach porovnava HODNOTOU (==), rovnako
+    # ako to robi `match` v cancel_decision. Keby sa tu porovnavalo cez
+    # `is`, ten isty vstup by v dvoch tabulkach znamenal dva rozne stavy.
+    if state == ReservationState.PENDING_APPROVAL and not approval_request_is_alive(
         starts_at, now
     ):
         return Decision(
@@ -125,8 +133,11 @@ def confirm_decision(
 
     Stav sa posudzuje PRED casom, ako v diagrame aktivit 3.3: rezervacia,
     ktora nie je DRAFT, dostane INVALID_STATE aj po svojom zaciatku.
+
+    Vrati vzdy PRAVE JEDNO: blokujuci ciel, alebo zamietnutie. "Uspech
+    bez zmeny" potvrdenie nepozna.
     """
-    if state is not ReservationState.DRAFT:
+    if state != ReservationState.DRAFT:
         return Decision(
             rejection=ErrorCode.INVALID_STATE,
             reason=f"potvrdit mozno iba rezervaciu v stave DRAFT, nie {state}",
