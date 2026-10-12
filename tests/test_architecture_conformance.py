@@ -61,6 +61,7 @@ ELEMENTS = {
         "cancel_reservation",
         "enter_blocking_state",
         "expire_request_if_dead",
+        "_write_expired",
         "_lock_reservation",
         "_lock_instrument",
         "_overlapping_blocking",
@@ -72,6 +73,7 @@ ELEMENTS = {
         "_require_user",
         "_require_instrument",
         "_require_authorized",
+        "_require_allocatable",
     },
 }
 
@@ -313,4 +315,144 @@ def test_zoznam_blokujucich_stavov_sedi_s_kodom():
     assert {state.name for state in BLOCKING_STATES} == BLOCKING_STATE_NAMES, (
         "BLOCKING_STATES sa zmenili - aktualizuj BLOCKING_STATE_NAMES v tomto "
         "teste, inak prestane chranit novy stav"
+    )
+
+
+# =========================================================================
+# C05 - Detailed Design jednotky Reservation Lifecycle
+#
+# Rozhodnutia DD-1, DD-4 a DD-5 z docs/architecture-and-decisions.md,
+# C05.3. Rovnaky dovod ako vyssie: su to pravidla o tom, KDE nieco smie
+# byt, a test spravania ich nezachyti - druha kopia podmienky sa sprava
+# rovnako ako prva, az kym sa jedna z nich nezmeni.
+# =========================================================================
+
+#: Cista politika prechodov (DD-1).
+TRANSITIONS = SRC / "domain" / "transitions.py"
+
+#: Co politika nesmie poznat: perzistenciu, HTTP, sluzby ani hodiny.
+#: Cas dostava ako vstup `now` - jedno odcitanie na operaciu (BR-03).
+FORBIDDEN_FOR_POLICY = (
+    "sqlalchemy",
+    "fastapi",
+    "swilab.models",
+    "swilab.db",
+    "swilab.services",
+    "swilab.api",
+    "swilab.clock",
+)
+
+#: Casove predikaty prechodov. Vyhodnocuje ich iba politika.
+TRANSITION_TIME_RULES = frozenset({"may_cancel_confirmed", "approval_request_is_alive"})
+
+#: Jedina implementacia predpokladov alokacie (DD-5) a ti, co ju volaju.
+ALLOCATION_PRECONDITIONS = "_require_allocatable"
+ALLOCATING_OPERATIONS = {"confirm_reservation", "decide_reservation"}
+
+#: Jediny zapisovatel stavu EXPIRED (DD-4).
+EXPIRY_WRITER = "_write_expired"
+
+
+def _imported_modules(tree: ast.Module) -> set[str]:
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def _callers_of(name: str) -> set[str]:
+    """Funkcie sluzby, ktore volaju `name`."""
+    return {
+        function
+        for function, definition in _service_functions().items()
+        if any(_called_name(node) == name for node in ast.walk(definition))
+    }
+
+
+def test_politika_prechodov_nepozna_perzistenciu_ani_hodiny():
+    """DD-1: rozhodnutie o prechode je cista funkcia. Keby politika siahla
+    na session alebo na hodiny, prestala by sa dat overit bez databazy
+    a dve pravidla jednej operacie by mohli vidiet dva rozne okamihy."""
+    tree = ast.parse(TRANSITIONS.read_text(encoding="utf-8"))
+
+    offenders = sorted(
+        module
+        for module in _imported_modules(tree)
+        if module.startswith(FORBIDDEN_FOR_POLICY)
+    )
+    assert not offenders, (
+        f"Porusene DD-1: {TRANSITIONS.name} importuje {offenders}. Politika "
+        "smie poznat iba domenove hodnoty a kody zamietnuti."
+    )
+
+    reads_clock = [
+        node.lineno
+        for node in ast.walk(tree)
+        if _called_name(node) in {"now", "utcnow", "today"}
+    ]
+    assert not reads_clock, (
+        f"Porusene DD-1: {TRANSITIONS.name} cita cas na riadkoch {reads_clock}. "
+        "Cas je vstup `now`, nie volanie."
+    )
+
+
+def test_casove_pravidla_prechodov_vyhodnocuje_iba_politika():
+    """DD-1: sluzba sa na cas nepyta sama. Druhe vyhodnotenie lehoty alebo
+    zivosti ziadosti v sluzbe by bolo druhym rozhodnutim o tom istom
+    prechode - presne to, co C03 naslo pri BR-02 a pri zapise EXPIRED."""
+    tree = ast.parse(SERVICE.read_text(encoding="utf-8"))
+    used = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+
+    offenders = sorted(TRANSITION_TIME_RULES & used)
+    assert not offenders, (
+        f"Porusene DD-1: services/reservations.py pouziva {offenders}. "
+        "O prechode rozhoduje swilab.domain.transitions."
+    )
+
+    policy = ast.parse(TRANSITIONS.read_text(encoding="utf-8"))
+    evaluated = {_called_name(node) for node in ast.walk(policy)}
+    assert TRANSITION_TIME_RULES <= evaluated, (
+        "politika casove pravidla nevola - kontrola by strazila prazdne pravidlo"
+    )
+
+
+def test_predpoklady_alokacie_maju_jednu_implementaciu():
+    """DD-5: BR-05 a BR-04 overuje jedna funkcia a obe operacie, ktore
+    pristroj alokuju, idu cez nu."""
+    assert _callers_of("certification_covers") == {ALLOCATION_PRECONDITIONS}, (
+        "Porusene DD-5: certifikat (BR-04) sa vyhodnocuje mimo "
+        f"{ALLOCATION_PRECONDITIONS}()."
+    )
+    assert _callers_of(ALLOCATION_PRECONDITIONS) == ALLOCATING_OPERATIONS, (
+        f"Porusene DD-5: {ALLOCATION_PRECONDITIONS}() maju volat prave "
+        f"{sorted(ALLOCATING_OPERATIONS)}, vola ho "
+        f"{sorted(_callers_of(ALLOCATION_PRECONDITIONS))}."
+    )
+
+
+def test_expired_zapisuje_jedina_funkcia():
+    """DD-4: EXPIRED ma jedneho zapisovatela. Dve kopie tohto zapisu uz raz
+    existovali (review PR #7, R-3)."""
+    writers: list[str] = []
+    for path in _python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        owner = _enclosing_functions(tree)
+        for node in ast.walk(tree):
+            value = _written_state(node)
+            if isinstance(value, ast.Attribute) and value.attr == "EXPIRED":
+                writers.append(owner.get(node))
+
+    assert writers == [EXPIRY_WRITER], (
+        f"Porusene DD-4: EXPIRED ma zapisovat prave {EXPIRY_WRITER}(), "
+        f"zapisuje ho {writers}."
     )
