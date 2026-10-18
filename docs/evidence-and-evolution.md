@@ -213,8 +213,9 @@ TBD-01 až TBD-09 v časti 8 špecifikácie. Najpodstatnejšie pre ďalšie cvi�
 
 ## Commit / tag aplikácie
 
-Vetva `feature/c02-app` (nad `feature/c02-baseline`). Tag sa nastaví po
-zlúčení oboch častí C02.
+Vetva `feature/c02-app` (nad `feature/c02-baseline`), zlúčená ako PR #4
+(merge commit `fe36498`). Spoločný tag oboch častí C02 je
+`c02-baseline-v0.2` — viď koniec tohto oddielu.
 
 
 ---
@@ -308,7 +309,9 @@ schvaľovateľ), nie zmenou pravidla.
 ### Commit / tag aplikácie
 
 Vetvy `feature/c02-baseline` → `feature/c02-app` → `feature/c02-approval`
-(PR #3, #4, #5). Tag sa nastaví po zlúčení do `main`.
+(PR #3, #4, #5), merge commity `8065899`, `fe36498` a `38486dc`.
+Tag `c02-baseline-v0.2` je nastavený na posledný z nich (`38486dc`), teda na
+stav, v ktorom je baseline v0.2 celá v `main`.
 
 
 ---
