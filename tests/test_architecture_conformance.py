@@ -30,7 +30,10 @@ CO NEZACHYTI
 """
 
 import ast
+import os
 import pathlib
+import subprocess
+import sys
 
 SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "swilab"
 SERVICE = SRC / "services" / "reservations.py"
@@ -61,6 +64,7 @@ ELEMENTS = {
         "cancel_reservation",
         "enter_blocking_state",
         "expire_request_if_dead",
+        "_write_expired",
         "_lock_reservation",
         "_lock_instrument",
         "_overlapping_blocking",
@@ -72,6 +76,7 @@ ELEMENTS = {
         "_require_user",
         "_require_instrument",
         "_require_authorized",
+        "_require_allocatable",
     },
 }
 
@@ -313,4 +318,265 @@ def test_zoznam_blokujucich_stavov_sedi_s_kodom():
     assert {state.name for state in BLOCKING_STATES} == BLOCKING_STATE_NAMES, (
         "BLOCKING_STATES sa zmenili - aktualizuj BLOCKING_STATE_NAMES v tomto "
         "teste, inak prestane chranit novy stav"
+    )
+
+
+# =========================================================================
+# C05 - Detailed Design jednotky Reservation Lifecycle
+#
+# Rozhodnutia DD-1, DD-4 a DD-5 z docs/architecture-and-decisions.md,
+# C05.3. Rovnaky dovod ako vyssie: su to pravidla o tom, KDE nieco smie
+# byt, a test spravania ich nezachyti - druha kopia podmienky sa sprava
+# rovnako ako prva, az kym sa jedna z nich nezmeni.
+#
+# Kontroly hladaju MENA, nie vyznam. Vidia volanie, import aj pristup cez
+# atribut (`rules.may_cancel_confirmed`); nevidia pravidlo prepisane inymi
+# slovami ani meno poskladane z retazca (getattr).
+# =========================================================================
+
+#: Cista politika prechodov (DD-1) a balik, v ktorom lezi.
+TRANSITIONS = SRC / "domain" / "transitions.py"
+DOMAIN = SRC / "domain"
+
+#: Co sa pri importe politiky nesmie nacitat - ani nepriamo: perzistencia,
+#: HTTP, sluzby ani hodiny. Cas dostava politika ako vstup `now`.
+FORBIDDEN_FOR_POLICY = (
+    "sqlalchemy",
+    "psycopg",
+    "fastapi",
+    "swilab.models",
+    "swilab.db",
+    "swilab.services",
+    "swilab.api",
+    "swilab.clock",
+    "swilab.main",
+)
+
+#: Operacie, ktore menia stav existujucej rezervacie, a funkcia politiky,
+#: ktorej rozhodnutie vykonavaju.
+POLICY_OF_OPERATION = {
+    "confirm_reservation": "confirm_decision",
+    "cancel_reservation": "cancel_decision",
+    "expire_request_if_dead": "expiry_decision",
+}
+
+#: Pomenovane casove pravidla prechodov. Mimo balika domain/ ich nesmie
+#: pouzit nikto. (Druha forma BR-08 je SQL podmienka v dotaze na prekryv -
+#: ta meno nema a tato kontrola o nej nehovori.)
+TRANSITION_TIME_RULES = frozenset(
+    {"may_cancel_confirmed", "approval_request_is_alive", "CANCELLATION_LEAD_TIME"}
+)
+
+#: Jedina implementacia predpokladov alokacie (DD-5) a ti, co ju volaju.
+ALLOCATION_PRECONDITIONS = "_require_allocatable"
+ALLOCATING_OPERATIONS = {"confirm_reservation", "decide_reservation"}
+
+#: Kto smie citat Instrument.is_active (BR-05): predpoklady alokacie,
+#: vytvorenie (OP-01) a dostupnost (OP-02). Nikto dalsi.
+BR05_READERS = {ALLOCATION_PRECONDITIONS, "create_reservation", "check_availability"}
+
+#: Jediny zapisovatel stavu EXPIRED (DD-4).
+EXPIRY_WRITER = "_write_expired"
+
+SERVICE_FILE = SERVICE.relative_to(SRC).as_posix()
+
+
+def _names_used(tree: ast.AST) -> set[str]:
+    """Mena, ktore kod pouziva: premenne, atributy aj importovane mena."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names |= {alias.name.split(".")[-1] for alias in node.names}
+    return names
+
+
+def _functions_where(predicate) -> set[tuple[str, str]]:
+    """(subor, funkcia) pre kazdy uzol v src/swilab, ktory splna predikat.
+
+    Subor je sucastou odpovede zamerne: api/ aj services/ maju funkcie
+    s rovnakym menom (confirm_reservation, create_reservation, ...).
+    """
+    found: set[tuple[str, str]] = set()
+    for path in _python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        owner = _enclosing_functions(tree)
+        found |= {
+            (path.relative_to(SRC).as_posix(), owner.get(node, "<modul>"))
+            for node in ast.walk(tree)
+            if predicate(node)
+        }
+    return found
+
+
+def _in_service(names) -> set[tuple[str, str]]:
+    return {(SERVICE_FILE, name) for name in names}
+
+
+def _mentions_time(node: ast.AST) -> bool:
+    return any(
+        (isinstance(child, ast.Name) and child.id == "now")
+        or (isinstance(child, ast.Attribute) and child.attr in {"starts_at", "ends_at"})
+        for child in ast.walk(node)
+    )
+
+
+def test_politika_prechodov_nepozna_perzistenciu_ani_hodiny():
+    """DD-1: rozhodnutie o prechode je cista funkcia. Keby politika siahla
+    na session alebo na hodiny, prestala by sa dat overit bez databazy
+    a dve pravidla jednej operacie by mohli vidiet dva rozne okamihy.
+
+    Import sa overuje SKUTOCNYM importom v cistom procese, nie citanim
+    prikazov `import`: zachyti aj `from swilab import db`, relativny import
+    aj zavislost, ktoru by pritiahol modul, na ktorom politika stoji.
+    """
+    probe = (
+        "import sys\n"
+        "import swilab.domain.transitions\n"
+        f"print([m for m in sorted(sys.modules) if m.startswith({FORBIDDEN_FOR_POLICY!r})])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(SRC.parent)},
+    )
+    assert result.returncode == 0, result.stderr
+    loaded = ast.literal_eval(result.stdout.strip())
+    assert not loaded, (
+        f"Porusene DD-1: import politiky nacita {loaded}. Politika smie "
+        "poznat iba domenove hodnoty a kody zamietnuti."
+    )
+
+    reads_clock = [
+        f"{path.relative_to(SRC).as_posix()}:{node.lineno}"
+        for path in sorted(DOMAIN.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if _called_name(node) in {"now", "utcnow", "today"}
+    ]
+    assert not reads_clock, (
+        f"Porusene DD-1: domena cita cas ({reads_clock}). Cas je vstup `now`, "
+        "nie volanie."
+    )
+
+
+def test_casove_pravidla_prechodov_pouziva_iba_domena():
+    """DD-1: lehotu (BR-03) ani zivost ziadosti si mimo domeny nikto
+    nevyhodnocuje sam. Druhe vyhodnotenie v sluzbe alebo v API by bolo
+    druhym rozhodnutim o tom istom prechode - presne to, co C03 naslo pri
+    BR-02 a pri zapise EXPIRED."""
+    offenders = sorted(
+        f"{path.relative_to(SRC).as_posix()}: {name}"
+        for path in _python_files()
+        if DOMAIN not in path.parents
+        for name in TRANSITION_TIME_RULES
+        & _names_used(ast.parse(path.read_text(encoding="utf-8")))
+    )
+    assert not offenders, (
+        "Porusene DD-1: casove pravidlo prechodu sa pouziva mimo domain/.\n  "
+        + "\n  ".join(offenders)
+        + "\nO prechode rozhoduje swilab.domain.transitions."
+    )
+
+    policy = ast.parse(TRANSITIONS.read_text(encoding="utf-8"))
+    assert {"may_cancel_confirmed", "approval_request_is_alive"} <= {
+        _called_name(node) for node in ast.walk(policy)
+    }, "politika casove pravidla nevola - kontrola by strazila prazdne pravidlo"
+
+
+def test_operacie_rozhoduju_iba_cez_politiku():
+    """DD-1: operacia, ktora meni stav existujucej rezervacie, sa na
+    prechod pyta politiky a cas sama neporovnava.
+
+    Bez tejto kontroly DD-1 nestrazi nic: sluzba, ktora by sa vratila
+    k vlastnym `if`, by presla vsetkymi testami spravania, kym by sa
+    od tabulky neodlisila."""
+    functions = _service_functions()
+
+    for operation, decision in POLICY_OF_OPERATION.items():
+        called = {_called_name(node) for node in ast.walk(functions[operation])}
+        assert decision in called, (
+            f"Porusene DD-1: {operation}() nevola {decision}() - rozhoduje sama."
+        )
+
+    offenders = [
+        f"{name}():{node.lineno}"
+        for name in (*POLICY_OF_OPERATION, "decide_reservation")
+        for node in ast.walk(functions[name])
+        if isinstance(node, ast.Compare) and _mentions_time(node)
+    ]
+    assert not offenders, (
+        "Porusene DD-1: operacia porovnava cas sama, mimo politiky:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_politiku_prechodov_vola_iba_reservation_lifecycle():
+    """Politika je rozhodovacia cast Reservation Lifecycle (C05.3) - fyzicky
+    lezi v domain/, ale vlastnikom rozhodnutia o prechode ostava lifecycle
+    (O-1). Keby ju volal Approval Workflow alebo API, mal by prechod
+    dvoch vlastnikov."""
+    policy_functions = set(POLICY_OF_OPERATION.values())
+
+    callers = _functions_where(lambda node: _called_name(node) in policy_functions)
+    inside_policy = {caller for caller in callers if caller[0] == "domain/transitions.py"}
+    allowed = _in_service(ELEMENTS["Reservation Lifecycle"]) | inside_policy
+
+    assert callers - allowed == set(), (
+        "Politiku prechodov vola niekto mimo Reservation Lifecycle: "
+        f"{sorted(callers - allowed)}"
+    )
+    assert _in_service(POLICY_OF_OPERATION) <= callers, (
+        "operacie lifecycle politiku nevolaju - kontrola by strazila prazdne pravidlo"
+    )
+
+
+def test_predpoklady_alokacie_maju_jednu_implementaciu():
+    """DD-5: BR-05 a BR-04 overuje jedna funkcia a obe operacie, ktore
+    pristroj alokuju, idu cez nu. Druha kopia ktorejkolvek z dvoch kontrol
+    by sa spravala rovnako - preto ju musi najst staticka kontrola."""
+    certificate = _functions_where(
+        lambda node: _called_name(node) == "certification_covers"
+    )
+    assert certificate == _in_service({ALLOCATION_PRECONDITIONS}), (
+        "Porusene DD-5: certifikat (BR-04) sa vyhodnocuje mimo "
+        f"{ALLOCATION_PRECONDITIONS}(): {sorted(certificate)}"
+    )
+
+    activity = _functions_where(
+        lambda node: isinstance(node, ast.Attribute)
+        and node.attr == "is_active"
+        and isinstance(node.ctx, ast.Load)
+    )
+    assert (SERVICE_FILE, ALLOCATION_PRECONDITIONS) in activity
+    assert activity <= _in_service(BR05_READERS), (
+        "Porusene DD-5: aktivnost pristroja (BR-05) cita niekto mimo "
+        f"{sorted(BR05_READERS)}: {sorted(activity - _in_service(BR05_READERS))}"
+    )
+
+    callers = _functions_where(
+        lambda node: _called_name(node) == ALLOCATION_PRECONDITIONS
+    )
+    assert callers == _in_service(ALLOCATING_OPERATIONS), (
+        f"Porusene DD-5: {ALLOCATION_PRECONDITIONS}() maju volat prave "
+        f"{sorted(ALLOCATING_OPERATIONS)}, vola ho {sorted(callers)}."
+    )
+
+
+def test_expired_zapisuje_jedina_funkcia():
+    """DD-4: EXPIRED ma jedneho zapisovatela. Dve kopie tohto zapisu uz raz
+    existovali (review PR #7, R-3)."""
+    writers = sorted(
+        _functions_where(
+            lambda node: isinstance(value := _written_state(node), ast.Attribute)
+            and value.attr == "EXPIRED"
+        )
+    )
+
+    assert writers == [(SERVICE_FILE, EXPIRY_WRITER)], (
+        f"Porusene DD-4: EXPIRED ma zapisovat prave {EXPIRY_WRITER}(), "
+        f"zapisuje ho {writers}."
     )
