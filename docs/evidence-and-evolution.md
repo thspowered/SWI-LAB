@@ -680,8 +680,7 @@ konštruktorom — `setattr()` alebo hromadný `UPDATE` cez SQL.
 
 **Commit/tag:** vetva `feature/c03-architecture` (PR #7) — návrh `03cfaab`,
 implementácia ADR-01 `611e7f4`, evidence `b77065c`, opravy po review
-`39b6c00`. Tag `c03-architecture` sa nastaví na
-merge commit po zlúčení do `main`.
+`39b6c00`. Tag `c03-architecture` je nastavený na merge commit `63ec3f7`.
 
 ---
 
@@ -1026,5 +1025,5 @@ a zadanie — a iba čítali.
 `3e095e1`, implementácia `11ade77`, evidence `9e5fd9c`, opravy po nezávislej
 kontrole `2fefeee` (kód a testy) a nasledujúci commit (dokumenty). Na vetve je
 navyše `80a60b6`, drobná oprava stavu baseline v špecifikácii, ktorá s C05
-nesúvisí. Tag `c05-detailed-design` sa nastaví na merge commit po zlúčení do
-`main`.
+nesúvisí. Tag `c05-detailed-design` je nastavený na merge commit `c7df7a0`
+(PR #8).

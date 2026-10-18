@@ -195,7 +195,7 @@ Tri medzery prenesené z C02 (`REQ-05` v oboch vetvách, `REQ-16`) sú
 - [x] testy spustené — `249 passed`; 32 vložených chýb, každú zachytí aspoň jeden test (`scripts/mutation_check.py`)
 - [x] DD porovnané s implementáciou — s kódom z C03 aj s výsledkom; rozdiely a ich riešenie sú v evidence
 - [x] commity v poradí návrh → testy → implementácia → evidence → opravy po kontrole
-- [ ] tag `c05-detailed-design` — nastaví sa na merge commit po zlúčení
+- [x] tag `c05-detailed-design` — merge commit `c7df7a0` (PR #8)
 
 Stavy, kódy zamietnutí ani HTTP statusy sa v C05 nemenili — mení sa vnútro
 jednej jednotky. Pred review v tíme prešla vetva tromi nezávislými kontrolami;
