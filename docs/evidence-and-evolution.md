@@ -1030,3 +1030,186 @@ kontrole `2fefeee` (kód a testy) a nasledujúci commit (dokumenty). Na vetve je
 navyše `80a60b6`, drobná oprava stavu baseline v špecifikácii, ktorá s C05
 nesúvisí. Tag `c05-detailed-design` je nastavený na merge commit `c7df7a0`
 (PR #8).
+
+---
+
+## C07 — Vyhodnotenie nálezov z C06
+
+**Hodnotená baseline (C06 assessed baseline):** `db9c523`, tagy `c02-baseline-v0.2`,
+`c03-architecture`, `c05-detailed-design`.
+**Reporting baseline:** tento commit na vetve `feature/c07-findings-and-risks`.
+**Zdroj:** nezávislé review cudzieho tímu podľa L06, 2026-10-26.
+
+Nálezy sme reprodukovali na hodnotenej baseline, nie na opise v review.
+Prostredie: PostgreSQL 16 z `docker-compose.yml`, Python 3.12.
+
+### F-01 — timezone: výsledok C01 spiku závisí od konfigurácie servera
+
+| Položka | Obsah |
+| ------- | ----- |
+| **Claim** | `evidence-and-evolution.md` (C01 spike): „Postgres `timestamptz` neukladá pásmo… databáza vracia UTC." · `architecture-and-decisions.md`: „testy… rozbehnú sa proti akémukoľvek Postgresu." |
+| **Expected** | `test_persistence_spike.py:68` očakáva `utcoffset() == 0` nezávisle od servera. |
+| **Observed** | PostgreSQL vracia `timestamptz` prevedené do pásma **session** (`TimeZone`), nie vždy do UTC. Obraz `postgres:16` má UTC, natívna inštalácia preberá pásmo systému. |
+| **Verify** | Reprodukované na `db9c523`: `PGTZ=UTC pytest` → `249 passed`; `PGTZ=Europe/Prague pytest` → **`1 failed, 248 passed`**, `AssertionError` na `test_persistence_spike.py:68`. |
+| **Disposition** | **VERIFIED FINDING · ACCEPT.** Nález je technický, nie vec vkusu hodnotiteľa. |
+| **Action / owner** | Fixovať pásmo na spojení (`connect_args` v `db.py` aj `conftest.py`) a tým zo sľubu urobiť vlastnosť systému; alternatívou je preformulovať tvrdenie a deklarovať prostredie. Owner: Tomáš Krišica. |
+| **Closure evidence** | **Otvorené.** Riziko `R-01`, akcia `P1`. |
+
+Doplnenie k dopadu, ktoré review neuvádza: netýka sa to len testu. Pri serveri
+mimo UTC vracia API časy s offsetom (`+01:00`) namiesto `Z`, čo je zmena
+pozorovateľného rozhrania.
+
+### F-02 — hranica OP-01 `starts_at == now` nie je overená
+
+| Položka | Obsah |
+| ------- | ----- |
+| **Claim** | `specification.md`, OP-01: „`s <= currentTime` → zamietnuté" (`START_IN_PAST`). |
+| **Expected** | Rezervácia začínajúca presne v okamihu `now` je zamietnutá. |
+| **Observed** | Jediný test (`test_create_rejects_past_start`) skúša `now - 1h`, teda ďaleko od hranice. |
+| **Verify** | Reprodukované: mutácia `if starts_at <= now:` → `if starts_at < now:` na `services/reservations.py:314` **prežila celú sadu — `249 passed`**. Náš `scripts/mutation_check.py` ju nepokrýva (hlási ďalej `32/32`), lebo mieri na jednotku z C05. |
+| **Disposition** | **VERIFIED FINDING · ACCEPT.** |
+| **Action / owner** | Doplniť hraničný test `starts_at == now` → `START_IN_PAST` a mutáciu pridať do `mutation_check.py`, aby ju chránila trvalo. Owner: Tomáš Hrubý. |
+| **Closure evidence** | **Otvorené.** Riziko `R-02`, akcia `P2`. |
+
+Je to jediná hranica v systéme, ktorú nestrážime. Pri `BR-01`, `BR-03`, `BR-04`,
+`BR-08` a `REQ-06` to robíme dôsledne — o to viac to patrí doplniť.
+
+### F-03 — `REQ-16` si v schválenej baseline v0.2 protirečí s OP-04
+
+| Položka | Obsah |
+| ------- | ----- |
+| **Claim** | `REQ-16` a príklad overenia pri OP-03: pri súbehu zrušenia a potvrdenia „uspeje najviac jedno z nich". |
+| **Expected** | Jedno konzistentné čítanie naprieč špecifikáciou. |
+| **Observed** | OP-04 pripúšťa, že po víťaznom potvrdení sa zrušenie posúdi podľa nového stavu a ďaleko pred začiatkom **legitímne uspeje**. Obe operácie teda uspejú. |
+| **Verify** | Potvrdené čítaním špecifikácie. Rozpor sme našli sami už v C03 (nález N-07, riziko 6) a zopakovali v C05 (riziko 9); testy pokrývajú **obe** čítania. |
+| **Disposition** | **VERIFIED FINDING · DEFER** — ale s uznaním, že odklad je sám o sebe nález. |
+| **Prečo DEFER** | Je to zmena **špecifikácie**, nie architektúry ani kódu. Správanie systému je definované a otestované; mení sa znenie požiadavky, a to patrí do v0.3 s analýzou dopadu, nie do opravy na poslednú chvíľu pred obhajobou. |
+| **Čo review dodalo** | Upozornenie, ktoré sme si sami nevšimli: špecifikácia je naďalej označená ako **schválená** (§11), tabuľka konzistencie v §9 rozpor neuvádza a README v C02 DoD tvrdí „text, požiadavky a oba pohľady sú vzájomne konzistentné". Dokumenty teda tvrdia konzistenciu, o ktorej vieme, že neplatí. |
+| **Action / owner** | Rozhodnúť v0.3 (preformulovať `REQ-16` na „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom blokuje prístroj") alebo zdôvodnené „bez zmeny". Do rozhodnutia doplniť do §9 a do README poznámku, že ide o známy otvorený rozpor. Owner: obaja, rozhodnutie tímu. |
+| **Closure evidence** | **Otvorené.** Riziko `R-03`, akcia `P3`. |
+
+### Kandidát, ktorý review samo zamietlo
+
+`decide_reservation` porovnáva stav cez `is not`, hoci `transitions.py` zdôvodňuje
+porovnanie hodnotou. S ORM enumami je správanie správne a funkcia leží mimo
+jednotky z C05 — **REJECTED CANDIDATE**, nie je to vada. Súhlasíme.
+
+### Čo review potvrdilo
+
+Reprodukovalo `249 passed`, `32/32` zachytených mutácií a počty testov z C05
+(92 unit, 49 component). Dvanásť vlastných mutácií mimo rozsahu nášho skriptu:
+jedenásť zachytených, jedna prežila — a to je presne `F-02`.
+
+---
+
+## Registr rizík — C07/C08
+
+Päť rizík zo štyroch kategórií. `L × I`: 1–2 LOW, 3–4 MEDIUM, 6–9 HIGH.
+**Actual residual** je `NOT VERIFIED`, kým nie je účinnosť opatrenia doložená —
+plán skóre neznižuje.
+
+### R-01 — prostredie: nefixované pásmo databázy
+
+- **Kategória:** Technical / Quality
+- **Popis rizika:** Spojenie nefixuje `TimeZone` → ak projekt pobeží proti
+  Postgresu mimo UTC (iný stroj, hodnotiteľ, nasadenie) → sada padne a API vráti
+  časy s offsetom namiesto `Z`; tvrdenie „rozbehnú sa proti akémukoľvek
+  Postgresu" neplatí.
+- **Počiatočné riziko:** L=3, I=2 → **HIGH (6)**. `L=3`, lebo sa to už raz
+  stalo — hodnotiteľ na to narazil pri prvom behu mimo nášho `docker-compose`.
+- **Stratégia:** MITIGATE — odstrániť závislosť od konfigurácie, nie ju opisovať.
+- **Opatrenie / owner / termín:** `connect_args={"options": "-c timezone=UTC"}`
+  v `db.py` aj `conftest.py`; doplniť test, ktorý pásmo spojenia overí.
+  Owner: Tomáš Krišica, do ďalšieho cvičenia.
+- **Dôkaz účinnosti:** `PGTZ=Europe/Prague pytest` musí dať `249 passed`.
+  Stav: **neoverené**.
+- **Očakávané reziduálne:** L=1, I=2 → LOW (2).
+- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Prijatie:** po overení prijíma Tomáš Krišica.
+- **Monitoring / trigger:** spustenie proti inej databáze než z `docker-compose.yml`;
+  akýkoľvek čas v odpovedi API, ktorý nekončí na `Z`.
+
+### R-02 — overenie: neotestovaná hranica OP-01
+
+- **Kategória:** Technical / Quality
+- **Popis rizika:** Hranica `starts_at == now` nemá test → zmena `<=` na `<`
+  prejde nepovšimnutá → aplikácia prijme rezerváciu začínajúcu presne teraz,
+  v rozpore s OP-01.
+- **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**. `L=2`, lebo kód sa okolo
+  tohto miesta pri C05 už raz menil; `I=2`, lebo ide o jednu hranicu jednej
+  operácie, nie o invariant.
+- **Stratégia:** MITIGATE.
+- **Opatrenie / owner / termín:** hraničný test + zaradenie mutácie do
+  `scripts/mutation_check.py`. Owner: Tomáš Hrubý, do ďalšieho cvičenia.
+- **Dôkaz účinnosti:** mutácia `<=` → `<` musí po doplnení padnúť.
+  Stav: **neoverené**.
+- **Očakávané reziduálne:** L=1, I=1 → LOW (1).
+- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Prijatie:** po overení prijíma Tomáš Hrubý.
+- **Monitoring / trigger:** každé ďalšie rozšírenie `mutation_check.py`;
+  ktorákoľvek prežitá mutácia.
+
+### R-03 — rozsah: nerozhodnutý rozpor `REQ-16` ↔ OP-04
+
+- **Kategória:** Scope / Requirements
+- **Popis rizika:** Schválená baseline v0.2 obsahuje dve čítania `REQ-16` →
+  pri obhajobe alebo v CP2 sa prijme to nesprávne → prepracovanie testov, alebo
+  neobhájiteľné tvrdenie o konzistencii v README a v §9.
+- **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**. `L=2`: rozpor prešiel dvoma
+  checkpointmi bez dôsledku, ale pri treťom sa naň už pýtali.
+- **Stratégia:** MITIGATE — rozhodnúť, nie ďalej odkladať.
+- **Opatrenie / owner / termín:** rozhodnutie tímu — v0.3 s analýzou dopadu,
+  alebo zdôvodnené „bez zmeny"; do rozhodnutia poznámka v §9 a v README.
+  Owner: obaja, do ďalšieho cvičenia.
+- **Dôkaz účinnosti:** zápis rozhodnutia v `specification.md` + aktualizovaná
+  tabuľka konzistencie. Stav: **neoverené**.
+- **Očakávané reziduálne:** L=1, I=2 → LOW (2).
+- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Prijatie:** rozhodnutie tímu, nie jednotlivca.
+- **Monitoring / trigger:** akákoľvek ďalšia zmena `REQ-16`, OP-03 alebo OP-04.
+
+### R-04 — prevádzka: schéma bez migrácií
+
+- **Kategória:** Release / Operation
+- **Popis rizika:** Schéma vzniká cez `create_all()` pri štarte → pri ďalšej
+  zmene schémy nad databázou s dátami → ručná prestavba databázy, strata dát,
+  ohrozená živá ukážka.
+- **Počiatočné riziko:** L=2, I=3 → **HIGH (6)**. `I=3`, lebo zlyhanie pri
+  ukážke je nezotaviteľné v reálnom čase; `L=2`, lebo CP2 zmenu schémy
+  pravdepodobne prinesie.
+- **Stratégia:** ACCEPT pre CP1 s contingency, MITIGATE pred CP2.
+- **Opatrenie / owner / termín:** pre CP1 pripravená a vyskúšaná postupnosť
+  `docker compose down && docker compose up -d --wait db` pred ukážkou; migrácie
+  ako samostatné rozhodnutie pre CP2. Owner: Tomáš Hrubý, pred CP2.
+- **Dôkaz účinnosti:** prestavba databázy nás už raz zasiahla pri C02 časti B
+  a postup je zapísaný v PR #5. Pre CP1 teda **overené ako contingency**,
+  nie ako odstránenie príčiny.
+- **Očakávané reziduálne:** L=2, I=2 → MEDIUM (4) pre CP1.
+- **Skutočné reziduálne:** MEDIUM (4) pre CP1 — contingency je vyskúšaná;
+  pre CP2 **NOT VERIFIED**, migrácie neexistujú.
+- **Prijatie:** Tomáš Hrubý pre CP1.
+- **Monitoring / trigger:** akákoľvek zmena v `models.py`.
+
+### R-05 — harmonogram: pre CP2 nie je v repozitári zaznamenaný plán
+
+- **Kategória:** Schedule / Integration
+- **Popis rizika:** V repozitári nie je žiadny plán prác ani termíny pre CP2 →
+  práca sa naakumuluje tesne pred checkpointom → nezostane čas na integráciu
+  a opravy, tak ako to opisuje zadanie C07/C08.
+- **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**.
+- **Stratégia:** MITIGATE — pomenovať planning gap a odstrániť ho.
+- **Opatrenie / owner / termín:** zapísať work packages pre CP2 s vlastníkmi
+  a termínmi. Owner: obaja, do ďalšieho cvičenia.
+- **Dôkaz účinnosti:** existujúci plán v repozitári. Stav: **neoverené**.
+- **Očakávané reziduálne:** L=1, I=2 → LOW (2).
+- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Prijatie:** rozhodnutie tímu.
+- **Monitoring / trigger:** zadanie CP2; akákoľvek zmena rozsahu.
+
+### Otvorené issues (nie riziká — už nastali)
+
+| ID | Issue | Dopad | Owner | Ďalší krok |
+| -- | ----- | ----- | ----- | ---------- |
+| **I-01** | Schvaľovací tok nie je použiteľný end-to-end: Notification Service nie je napojená (`TBD-03`) a systém nemá žiadnu čítaciu operáciu (`TBD-09`). | Vedúci sa o žiadosti nedozvie a žiadateľ sa nedozvie výsledok. Tok funguje len cez testy a `scripts/demo.py`. | obaja | Rozhodnúť rozsah pre CP2; dovtedy priznávať ako obmedzenie, nie zakrývať. |
+| **I-02** | Serializácia na prístroj (ADR-01) nie je zmeraná. | Future pressure z C01 hovorí o 10× viac súbežných rezervácií; nemáme žiadne číslo. | Tomáš Krišica | Buď zmerať, alebo tvrdenie o škálovaní nerobiť. |
+| **I-03** | `F-01` a `F-02` sú doložené nezhody, nie budúce riziká. | Viď vyššie. | viď F-01, F-02 | Akcie `P1` a `P2`. |
