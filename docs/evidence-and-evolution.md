@@ -80,7 +80,9 @@ porovnáva okamih, nie zápis: `09:30+02:00 == 07:30+00:00` je `True`.
    priamo, bez zaokrúhľovania a bez zavedenia granularity slotu.
 
 2. **Lokálny čas rezervácie nie je odvoditeľný z databázy a treba s tým rátať.**
-   Databáza vracia UTC. Ak bude UI potrebovať zobraziť „rezervoval si to na
+   Databáza vracia UTC *(doplnené po C06, F-01: vracia ho v pásme session;
+   UTC platí, lebo ho od `8b1083b` nastavujeme na každom spojení — viď C07)*.
+   Ak bude UI potrebovať zobraziť „rezervoval si to na
    9:30", musí si pásmo doplniť z inde — z umiestnenia prístroja alebo
    z preferencie používateľa. Pre C03 to znamená, že prevod na lokálny čas
    patrí do API vrstvy, nie do modelu, a že do `Instrument` pravdepodobne
@@ -1037,7 +1039,11 @@ nesúvisí. Tag `c05-detailed-design` je nastavený na merge commit `c7df7a0`
 
 **Hodnotená baseline (C06 assessed baseline):** `db9c523`, tagy `c02-baseline-v0.2`,
 `c03-architecture`, `c05-detailed-design`.
-**Reporting baseline:** tento commit na vetve `feature/c07-findings-and-risks`.
+**Reporting baseline:** commit s touto verziou záznamu na vetve
+`feature/c07-findings-and-risks`; presný hash a dátum uvádza status report
+(`docs/SWI-LAB_C08_Project_Status.pptx`, slide 01). Prvá verzia záznamu
+(`12e24b3`) opisovala stav pred opravami; F-01 a F-02 sú odvtedy uzavreté
+v `8b1083b` a `fe6c298`.
 **Zdroj:** nezávislé review cudzieho tímu podľa L06, 2026-10-26.
 
 Nálezy sme reprodukovali na hodnotenej baseline, nie na opise v review.
@@ -1052,8 +1058,13 @@ Prostredie: PostgreSQL 16 z `docker-compose.yml`, Python 3.12.
 | **Observed** | PostgreSQL vracia `timestamptz` prevedené do pásma **session** (`TimeZone`), nie vždy do UTC. Obraz `postgres:16` má UTC, natívna inštalácia preberá pásmo systému. |
 | **Verify** | Reprodukované na `db9c523`: `PGTZ=UTC pytest` → `249 passed`; `PGTZ=Europe/Prague pytest` → **`1 failed, 248 passed`**, `AssertionError` na `test_persistence_spike.py:68`. |
 | **Disposition** | **VERIFIED FINDING · ACCEPT.** Nález je technický, nie vec vkusu hodnotiteľa. |
-| **Action / owner** | Fixovať pásmo na spojení (`connect_args` v `db.py` aj `conftest.py`) a tým zo sľubu urobiť vlastnosť systému; alternatívou je preformulovať tvrdenie a deklarovať prostredie. Owner: Tomáš Krišica. |
-| **Closure evidence** | **Otvorené.** Riziko `R-01`, akcia `P1`. |
+| **Action / owner** | Fixovať pásmo na spojení a tým zo sľubu urobiť vlastnosť systému (nie preformulovať tvrdenie). Pridelené Tomášovi Krišicovi, vykonal Tomáš Hrubý. |
+| **Closure evidence** | **Uzavreté: `db9c523` → `8b1083b`.** `create_db_engine()` v `src/swilab/db.py` je jediný spôsob, ako vzniká engine pre aplikáciu aj testy; pri každom novom spojení nastaví `SET TIME ZONE 'UTC'`. Overenie na `8b1083b`: `PGTZ=Europe/Prague pytest` → `253 passed`; server s `ALTER DATABASE swilab SET timezone TO 'Europe/Prague'` → `db9c523`: `1 failed, 248 passed`, `8b1083b`: `253 passed`. Nové testy `test_session_timezone_is_utc_whatever_the_server_says` a `test_engine_aplikacie_aj_testov_bezi_v_utc`; mutácia `F01` (odstránenie nastavenia) ich zhodí obe. Riziko `R-01`. |
+
+**Návrh z review sme overili a nestačí.** `connect_args={"options": "-c timezone=UTC"}`
+pri `PGTZ=Europe/Prague` prehrá: `PGTZ` sa posiela ako parameter spojenia a server
+ho spracuje až po `options`, takže session ostane v `Europe/Prague`. Preto `SET`
+až po pripojení, ktorý prebije server aj klienta.
 
 Doplnenie k dopadu, ktoré review neuvádza: netýka sa to len testu. Pri serveri
 mimo UTC vracia API časy s offsetom (`+01:00`) namiesto `Z`, čo je zmena
@@ -1069,7 +1080,7 @@ pozorovateľného rozhrania.
 | **Verify** | Reprodukované: mutácia `if starts_at <= now:` → `if starts_at < now:` na `services/reservations.py:314` **prežila celú sadu — `249 passed`**. Náš `scripts/mutation_check.py` ju nepokrýva (hlási ďalej `32/32`), lebo mieri na jednotku z C05. |
 | **Disposition** | **VERIFIED FINDING · ACCEPT.** |
 | **Action / owner** | Doplniť hraničný test `starts_at == now` → `START_IN_PAST` a mutáciu pridať do `mutation_check.py`, aby ju chránila trvalo. Owner: Tomáš Hrubý. |
-| **Closure evidence** | **Otvorené.** Riziko `R-02`, akcia `P2`. |
+| **Closure evidence** | **Uzavreté: `db9c523` → `fe6c298`.** `test_create_start_boundary` overuje hranicu z oboch strán: `starts_at == now` → `START_IN_PAST`, `now + 1s` → `DRAFT`. Kód sa nemenil. Mutácia `F02` (`<=` → `<`) v `scripts/mutation_check.py` teraz padne na tomto teste — na `db9c523` prežila celú sadu. Riziko `R-02`. |
 
 Je to jediná hranica v systéme, ktorú nestrážime. Pri `BR-01`, `BR-03`, `BR-04`,
 `BR-08` a `REQ-06` to robíme dôsledne — o to viac to patrí doplniť.
@@ -1085,8 +1096,8 @@ Je to jediná hranica v systéme, ktorú nestrážime. Pri `BR-01`, `BR-03`, `BR
 | **Disposition** | **VERIFIED FINDING · DEFER** — ale s uznaním, že odklad je sám o sebe nález. |
 | **Prečo DEFER** | Je to zmena **špecifikácie**, nie architektúry ani kódu. Správanie systému je definované a otestované; mení sa znenie požiadavky, a to patrí do v0.3 s analýzou dopadu, nie do opravy na poslednú chvíľu pred obhajobou. |
 | **Čo review dodalo** | Upozornenie, ktoré sme si sami nevšimli: špecifikácia je naďalej označená ako **schválená** (§11), tabuľka konzistencie v §9 rozpor neuvádza a README v C02 DoD tvrdí „text, požiadavky a oba pohľady sú vzájomne konzistentné". Dokumenty teda tvrdia konzistenciu, o ktorej vieme, že neplatí. |
-| **Action / owner** | Rozhodnúť v0.3 (preformulovať `REQ-16` na „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom blokuje prístroj") alebo zdôvodnené „bez zmeny". Do rozhodnutia doplniť do §9 a do README poznámku, že ide o známy otvorený rozpor. Owner: obaja, rozhodnutie tímu. |
-| **Closure evidence** | **Otvorené.** Riziko `R-03`, akcia `P3`. |
+| **Action / owner** | **Návrh tímu: baseline v0.3** — preformulovať `REQ-16` na to, čo OP-04 aj implementácia skutočne garantujú: „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom blokuje prístroj". Kód ani testy sa nemenia — toto čítanie už tvrdí `test_concurrent_cancel_and_confirm_on_same_reservation`. Mení sa znenie požiadavky, preto v0.3 s analýzou dopadu a schválením, nie tichá oprava. Owner: Tomáš Krišica, do 2026-11-09. |
+| **Closure evidence** | **Otvorené.** Medzikrok hotový: §9 špecifikácie, hlavička špecifikácie a C02 DoD v README teraz rozpor uvádzajú, takže dokumenty už netvrdia konzistenciu, ktorá neplatí. Riziko `R-03`. |
 
 ### Kandidát, ktorý review samo zamietlo
 
@@ -1099,6 +1110,20 @@ jednotky z C05 — **REJECTED CANDIDATE**, nie je to vada. Súhlasíme.
 Reprodukovalo `249 passed`, `32/32` zachytených mutácií a počty testov z C05
 (92 unit, 49 component). Dvanásť vlastných mutácií mimo rozsahu nášho skriptu:
 jedenásť zachytených, jedna prežila — a to je presne `F-02`.
+
+### Stav po uzavretí F-01 a F-02 (reporting baseline)
+
+| Overenie | `db9c523` (hodnotená) | po opravách (`78b0dc4`) |
+| -------- | --------------------- | ----------------------- |
+| `pytest`, Postgres 16 z `docker-compose.yml` | `249 passed` | `253 passed` |
+| `PGTZ=Europe/Prague pytest` | `1 failed, 248 passed` | `253 passed` |
+| server s `timezone = Europe/Prague` (`ALTER DATABASE`) | `1 failed, 248 passed` | `253 passed` |
+| `scripts/mutation_check.py` | `32` mutácií, `0` prežilo — `F-02` mimo skriptu prežila | `34` mutácií (`+F01`, `+F02`), `0` prežilo |
+| čistý `git clone` + nový venv podľa README, druhý stroj (T. Hrubý) | — | `253 passed` |
+
+Štyri nové testy: dva pre F-01 (`test_persistence_spike.py`), dva prípady
+hranice pre F-02 (`test_create_start_boundary`). Počty testov z C05
+(92 unit, 49 component) sa nemenia.
 
 ---
 
@@ -1118,14 +1143,18 @@ plán skóre neznižuje.
 - **Počiatočné riziko:** L=3, I=2 → **HIGH (6)**. `L=3`, lebo sa to už raz
   stalo — hodnotiteľ na to narazil pri prvom behu mimo nášho `docker-compose`.
 - **Stratégia:** MITIGATE — odstrániť závislosť od konfigurácie, nie ju opisovať.
-- **Opatrenie / owner / termín:** `connect_args={"options": "-c timezone=UTC"}`
-  v `db.py` aj `conftest.py`; doplniť test, ktorý pásmo spojenia overí.
-  Owner: Tomáš Krišica, do ďalšieho cvičenia.
-- **Dôkaz účinnosti:** `PGTZ=Europe/Prague pytest` musí dať `249 passed`.
-  Stav: **neoverené**.
+- **Opatrenie / owner / termín:** pásmo session fixované pri každom spojení
+  (`SET TIME ZONE 'UTC'` v `create_db_engine()`, `src/swilab/db.py`, spoločné
+  pre aplikáciu aj testy) + dva testy. Pôvodne navrhnuté `connect_args` sa
+  ukázali ako nedostatočné (F-01). Owner: Tomáš Krišica, vykonal Tomáš Hrubý,
+  hotové 2026-11-01 v `8b1083b`.
+- **Dôkaz účinnosti:** `PGTZ=Europe/Prague pytest` → `253 passed`; server
+  nastavený na `Europe/Prague` (`ALTER DATABASE`) → `253 passed`, kým
+  `db9c523` dáva `1 failed, 248 passed`. Mutácia `F01` zachytená. Stav: **overené**.
 - **Očakávané reziduálne:** L=1, I=2 → LOW (2).
-- **Skutočné reziduálne:** **NOT VERIFIED.**
-- **Prijatie:** po overení prijíma Tomáš Krišica.
+- **Skutočné reziduálne:** **L=1, I=2 → LOW (2)**, overené behmi vyššie.
+  `L` neklesá na nulu: iná databáza než Postgres 16 overená nie je.
+- **Prijatie:** Tomáš Krišica.
 - **Monitoring / trigger:** spustenie proti inej databáze než z `docker-compose.yml`;
   akýkoľvek čas v odpovedi API, ktorý nekončí na `Z`.
 
@@ -1140,12 +1169,14 @@ plán skóre neznižuje.
   operácie, nie o invariant.
 - **Stratégia:** MITIGATE.
 - **Opatrenie / owner / termín:** hraničný test + zaradenie mutácie do
-  `scripts/mutation_check.py`. Owner: Tomáš Hrubý, do ďalšieho cvičenia.
-- **Dôkaz účinnosti:** mutácia `<=` → `<` musí po doplnení padnúť.
-  Stav: **neoverené**.
+  `scripts/mutation_check.py`. Owner: Tomáš Hrubý, hotové 2026-11-01
+  v `fe6c298`.
+- **Dôkaz účinnosti:** mutácia `F02` (`<=` → `<`) padne na
+  `test_create_start_boundary`; na `db9c523` prežila celú sadu.
+  Stav: **overené**.
 - **Očakávané reziduálne:** L=1, I=1 → LOW (1).
-- **Skutočné reziduálne:** **NOT VERIFIED.**
-- **Prijatie:** po overení prijíma Tomáš Hrubý.
+- **Skutočné reziduálne:** **L=1, I=1 → LOW (1)**, overené mutáciou.
+- **Prijatie:** Tomáš Hrubý.
 - **Monitoring / trigger:** každé ďalšie rozšírenie `mutation_check.py`;
   ktorákoľvek prežitá mutácia.
 
@@ -1158,11 +1189,13 @@ plán skóre neznižuje.
 - **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**. `L=2`: rozpor prešiel dvoma
   checkpointmi bez dôsledku, ale pri treťom sa naň už pýtali.
 - **Stratégia:** MITIGATE — rozhodnúť, nie ďalej odkladať.
-- **Opatrenie / owner / termín:** rozhodnutie tímu — v0.3 s analýzou dopadu,
-  alebo zdôvodnené „bez zmeny"; do rozhodnutia poznámka v §9 a v README.
-  Owner: obaja, do ďalšieho cvičenia.
-- **Dôkaz účinnosti:** zápis rozhodnutia v `specification.md` + aktualizovaná
-  tabuľka konzistencie. Stav: **neoverené**.
+- **Opatrenie / owner / termín:** tím navrhuje v0.3 — `REQ-16` preformulovať
+  podľa OP-04 (pozri F-03), s analýzou dopadu a schválením. Medzikrok hotový:
+  rozpor je uvedený v §9, v hlavičke špecifikácie aj v C02 DoD v README.
+  Owner: Tomáš Krišica, do 2026-11-09.
+- **Dôkaz účinnosti:** špecifikácia v0.3 s novým znením `REQ-16`, analýza
+  dopadu, aktualizovaná tabuľka konzistencie v §9; `pytest` bez zmeny testov
+  zelený. Stav: **neoverené** — v0.3 zatiaľ neexistuje.
 - **Očakávané reziduálne:** L=1, I=2 → LOW (2).
 - **Skutočné reziduálne:** **NOT VERIFIED.**
 - **Prijatie:** rozhodnutie tímu, nie jednotlivca.
@@ -1180,7 +1213,8 @@ plán skóre neznižuje.
 - **Stratégia:** ACCEPT pre CP1 s contingency, MITIGATE pred CP2.
 - **Opatrenie / owner / termín:** pre CP1 pripravená a vyskúšaná postupnosť
   `docker compose down && docker compose up -d --wait db` pred ukážkou; migrácie
-  ako samostatné rozhodnutie pre CP2. Owner: Tomáš Hrubý, pred CP2.
+  ako samostatné rozhodnutie pre CP2 — zapísať do 2026-11-09, vykonať podľa
+  plánu CP2 (R-05). Owner: Tomáš Hrubý.
 - **Dôkaz účinnosti:** prestavba databázy nás už raz zasiahla pri C02 časti B
   a postup je zapísaný v PR #5. Pre CP1 teda **overené ako contingency**,
   nie ako odstránenie príčiny.
@@ -1199,7 +1233,7 @@ plán skóre neznižuje.
 - **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**.
 - **Stratégia:** MITIGATE — pomenovať planning gap a odstrániť ho.
 - **Opatrenie / owner / termín:** zapísať work packages pre CP2 s vlastníkmi
-  a termínmi. Owner: obaja, do ďalšieho cvičenia.
+  a termínmi. Owner: Tomáš Hrubý, do 2026-11-09.
 - **Dôkaz účinnosti:** existujúci plán v repozitári. Stav: **neoverené**.
 - **Očakávané reziduálne:** L=1, I=2 → LOW (2).
 - **Skutočné reziduálne:** **NOT VERIFIED.**
@@ -1211,5 +1245,5 @@ plán skóre neznižuje.
 | ID | Issue | Dopad | Owner | Ďalší krok |
 | -- | ----- | ----- | ----- | ---------- |
 | **I-01** | Schvaľovací tok nie je použiteľný end-to-end: Notification Service nie je napojená (`TBD-03`) a systém nemá žiadnu čítaciu operáciu (`TBD-09`). | Vedúci sa o žiadosti nedozvie a žiadateľ sa nedozvie výsledok. Tok funguje len cez testy a `scripts/demo.py`. | obaja | Rozhodnúť rozsah pre CP2; dovtedy priznávať ako obmedzenie, nie zakrývať. |
-| **I-02** | Serializácia na prístroj (ADR-01) nie je zmeraná. | Future pressure z C01 hovorí o 10× viac súbežných rezervácií; nemáme žiadne číslo. | Tomáš Krišica | Buď zmerať, alebo tvrdenie o škálovaní nerobiť. |
-| **I-03** | `F-01` a `F-02` sú doložené nezhody, nie budúce riziká. | Viď vyššie. | viď F-01, F-02 | Akcie `P1` a `P2`. |
+| **I-02** | Serializácia na prístroj (ADR-01) nie je zmeraná. | Future pressure z C01 hovorí o 10× viac súbežných rezervácií; nemáme žiadne číslo. | Tomáš Krišica | Do 2026-11-09 rozhodnúť a zapísať pri ADR-01: buď merateľné kritérium + meranie, alebo tvrdenie o škálovaní stiahnuť. |
+| **I-03** | `F-01` a `F-02` boli doložené nezhody, nie budúce riziká. | Viď vyššie. | Tomáš Hrubý | **Uzavreté** v `8b1083b` a `fe6c298` (closure evidence pri F-01, F-02). |

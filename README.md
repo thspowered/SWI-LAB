@@ -146,7 +146,9 @@ operácií. Architektúru tejto cesty rieši až C03.
 - [x] spoločné doménové pravidlá a invarianty sú definované iba raz (BR-01..BR-08)
 - [x] existuje diagram prípadov užitia
 - [x] existuje stavový diagram celého životného cyklu Reservation
-- [x] text, požiadavky a oba pohľady sú vzájomne konzistentné
+- [x] text, požiadavky a oba pohľady sú vzájomne konzistentné — *s výnimkou
+  `REQ-16` ↔ OP-04, zistenou v C03 a potvrdenou v C06 (nález F-03); návrh
+  v0.3 je v [špecifikácii, časť 9](docs/specification.md)*
 - [x] baseline v0.1 explicitne schválená tímom — [PR #3](https://github.com/thspowered/SWI-LAB/pull/3)
 - [x] aplikácia demonštruje všetky štyri základné operácie — [PR #4](https://github.com/thspowered/SWI-LAB/pull/4)
 - [x] pre každú operáciu spustený úspešný aj negatívny / hraničný príklad

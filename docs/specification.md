@@ -12,6 +12,8 @@ Vizuálne pohľady na to isté správanie — diagram prípadov užitia, stavov�
 a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
 
 **Stav:** baseline v0.2 — schválená tímom 2026-10-04 (časť 11).
+**Známy otvorený rozpor:** `REQ-16` ↔ OP-04 — zistený v C03, potvrdený
+nezávislým review v C06 (nález F-03). Popis a návrh v0.3 sú na konci časti 9.
 
 **História verzií**
 
@@ -1064,6 +1066,21 @@ nefiguruje.
 *Vyriešené:* tvrdenie sa stalo požiadavkou **REQ-16** a dostalo spustiteľný
 dôkaz (`tests/test_concurrency_req05.py`, xfail). Implementácia ju zatiaľ
 nespĺňa — je to druhý architektonický driver pre C03.
+
+### Známy otvorený rozpor po schválení v0.2 — `REQ-16` ↔ OP-04
+
+*Doplnené po C06, nález F-03.* Tabuľky vyššie ho neuvádzajú, lebo sme ho
+našli až v C03.
+`REQ-16` hovorí, že pri súbehu zrušenia s potvrdením „uspeje najviac jedno
+z nich“. OP-04 však pri víťaznom potvrdení posúdi následné zrušenie podľa
+nového stavu — a ďaleko pred začiatkom (viac než 60 min, BR-03) **oprávnene
+uspeje**. Obe operácie teda uspejú a doslovné znenie `REQ-16` nesplní žiadna
+implementácia, ktorá spĺňa OP-04.
+*Stav:* otvorené. Tím navrhuje v0.3: `REQ-16` zúžiť na to, čo platí
+v oboch častiach — „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom
+blokuje prístroj“. Implementácia aj testy toto čítanie už dodržiavajú
+(`test_concurrent_cancel_and_confirm_on_same_reservation`), takže v0.3 zmení
+znenie, nie správanie. Detail v `docs/evidence-and-evolution.md`, časť C07.
 
 ---
 
