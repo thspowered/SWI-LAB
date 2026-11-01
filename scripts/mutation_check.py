@@ -1,4 +1,5 @@
-"""Mutacne overenie testov jednotky Reservation Lifecycle (C05).
+"""Mutacne overenie testov jednotky Reservation Lifecycle (C05)
+a uzavretych nalezov z nezavisleho review (C06).
 
 Otazka, na ktoru skript odpoveda: su testy odvodene z navrhu VAKUOVE,
 alebo naozaj padnu, ked sa navrh porusi?
@@ -35,6 +36,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 SERVICE = "src/swilab/services/reservations.py"
 POLICY = "src/swilab/domain/transitions.py"
 RULES = "src/swilab/domain/rules.py"
+DB = "src/swilab/db.py"
 
 #: Testy pridane v C05 - subory a staticke kontroly v spolocnom subore.
 C05_FILES = ("tests/test_transitions.py", "tests/test_lifecycle_contracts.py")
@@ -157,6 +159,8 @@ REASON_CHECK = "        if (self.rejection is None) != (self.reason is None):\n"
 #:           hned po implementacii.
 #: R*      - scenare z nezavislej kontroly: obidenia, ktore povodne testy
 #:           prepustili, a vetvy, ktore nemali test.
+#: F*      - nalezy z C06 review, ktore sada na hodnotenej baseline db9c523
+#:           prepustila. Mutacia vracia presne ten stav, ktory review nasiel.
 MUTATIONS = [
     ("M1", "_write_expired() necommituje",
      [(SERVICE, WRITE_EXPIRED, "    reservation.state = ReservationState.EXPIRED\n")]),
@@ -271,6 +275,10 @@ MUTATIONS = [
      [(SERVICE, CANCEL_ASKS_POLICY,
        CANCEL_ASKS_POLICY
        + "    if now >= reservation.starts_at:\n        pass\n")]),
+    ("F01", "spojenie nefixuje pasmo session (TimeZone zdedi od servera)",
+     [(DB, '    event.listen(engine, "connect", _session_in_utc)\n', "")]),
+    ("F02", "OP-01: zaciatok presne v okamihu now je prijaty (<= na <)",
+     [(SERVICE, "    if starts_at <= now:\n", "    if starts_at < now:\n")]),
 ]
 
 
