@@ -7,6 +7,9 @@ mikrosekundova presnost zapis a nacitanie?
 
 from datetime import UTC, datetime, timedelta, timezone
 
+from sqlalchemy import text
+
+from swilab.db import create_db_engine
 from swilab.domain.states import InstrumentCategory, ReservationState, UserRole
 from swilab.models import Instrument, Reservation, User
 
@@ -60,11 +63,11 @@ def test_reservation_round_trips_through_postgres(session, new_session):
         assert loaded.starts_at.microsecond == 123456
         assert loaded.ends_at.microsecond == 654321
 
-        # Nalez zo spiku, pribity ako assert: timestamptz neuklada pasmo,
-        # databaza vracia UTC. Asserty vyssie to nezachytia - "==" na aware
-        # datetime porovnava okamih, takze presli by rovnako pri +02:00
-        # aj pri +00:00. Ked sa toto spravanie zmeni (napr. niekto nastavi
-        # session TimeZone), chceme sa to dozvediet z testu.
+        # Nalez zo spiku, pribity ako assert: timestamptz neuklada pasmo.
+        # Asserty vyssie to nezachytia - "==" na aware datetime porovnava
+        # okamih, takze presli by rovnako pri +02:00 aj pri +00:00.
+        # UTC tu nevracia "kazdy Postgres", ale nase spojenie: pasmo session
+        # fixuje create_db_engine() (F-01 z C06, testy nizsie).
         assert loaded.starts_at.utcoffset() == timedelta(0), (
             "ocakavame UTC, nie povodny offset +02:00"
         )
@@ -73,3 +76,41 @@ def test_reservation_round_trips_through_postgres(session, new_session):
         assert loaded.state is ReservationState.DRAFT
         assert loaded.instrument_id == instrument.id
         assert loaded.user_id == user.id
+
+
+# --- F-01 z C06: pasmo session nezavisi od servera ani od klienta ----------
+#
+# Postgres vracia timestamptz v pasme SESSION (parameter TimeZone), nie vzdy
+# v UTC. Session ho dedi z postgresql.conf, z ALTER DATABASE alebo z PGTZ
+# klienta. Povodny spike to nevidel, lebo obraz postgres:16 ma predvolene
+# UTC - nezavisle review na to narazilo pri prvom behu mimo docker-compose.
+
+
+def test_session_timezone_is_utc_whatever_the_server_says(engine):
+    """F-01: spojenie, ktore by inak dostalo Europe/Prague (tak, ako ho
+    dostane od servera s inym postgresql.conf), musi aj tak bezat v UTC."""
+    prague = create_db_engine(
+        engine.url, connect_args={"options": "-c timezone=Europe/Prague"}
+    )
+    try:
+        with prague.connect() as connection:
+            zone = connection.execute(text("SHOW TimeZone")).scalar_one()
+            loaded = connection.execute(
+                text("SELECT TIMESTAMPTZ '2026-10-05 09:30:00+02'")
+            ).scalar_one()
+    finally:
+        prague.dispose()
+
+    assert zone == "UTC"
+    assert loaded.utcoffset() == timedelta(0), "ocakavame UTC, nie offset session"
+    assert loaded.hour == 7
+
+
+def test_engine_aplikacie_aj_testov_bezi_v_utc(engine):
+    """F-01: aplikacia aj testy dostavaju engine z tej istej tovarne.
+    Rovnaky tvar ako kontrola READ COMMITTED v test_concurrency_req05."""
+    from swilab.db import engine as app_engine
+
+    for candidate in (app_engine, engine):
+        with candidate.connect() as connection:
+            assert connection.execute(text("SHOW TimeZone")).scalar_one() == "UTC"
