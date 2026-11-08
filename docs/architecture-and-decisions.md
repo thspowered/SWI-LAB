@@ -53,6 +53,11 @@ Testy čítajú `DATABASE_URL`. Predvolene mieria na Postgres z `docker-compose.
 tohto repa, ale rozbehnú sa proti akémukoľvek Postgresu. Testcontainers by boli
 pohodlnejšie, ale pribíjajú testy na bežiaci Docker daemon u každého člena tímu.
 
+*Doplnené po C06 (nález F-01):* tvrdenie o „akomkoľvek Postgrese“ do `8b1083b`
+neplatilo — sada prešla iba proti serveru v UTC, lebo pásmo session sa dedilo
+od servera alebo z `PGTZ`. Odvtedy ho nastavuje `create_db_engine()`
+v `src/swilab/db.py` pri každom spojení, pre aplikáciu aj testy.
+
 ## Open / neriešené v C01
 - Súbežné potvrdzovanie (naša future pressure) — pomenované, neimplementované.
 - Notification Service — definovaná hranica, bez implementácie.

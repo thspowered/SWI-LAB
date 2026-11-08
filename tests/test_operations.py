@@ -115,6 +115,38 @@ def test_create_rejects_past_start(session, make_instrument, make_user, now):
     assert excinfo.value.code is ErrorCode.START_IN_PAST
 
 
+@pytest.mark.parametrize(
+    ("offset", "should_succeed"),
+    [(timedelta(0), False), (SECOND, True)],
+    ids=["starts_at == now", "starts_at == now + 1s"],
+)
+def test_create_start_boundary(session, make_instrument, make_user, now, offset, should_succeed):
+    """OP-01, hranica: `s <= currentTime` -> zamietnute, teda aj s == now.
+
+    Nalez F-02 z C06: test vyssie skusa iba now - 1h, takze mutacia `<=` na
+    `<` presla celou sadou. Hranica sa overuje z oboch stran, rovnako ako
+    BR-03 (60:00 vs 60:00:01)."""
+    instrument, user = make_instrument(), make_user()
+    starts_at = now + offset
+
+    def create():
+        return service.create_reservation(
+            session,
+            instrument_id=instrument.id,
+            user_id=user.id,
+            starts_at=starts_at,
+            ends_at=starts_at + HOUR,
+            now=now,
+        )
+
+    if should_succeed:
+        assert create().state is ReservationState.DRAFT
+    else:
+        with pytest.raises(DomainError) as excinfo:
+            create()
+        assert excinfo.value.code is ErrorCode.START_IN_PAST
+
+
 def test_create_ignores_overlap_and_certification(
     session, make_instrument, make_user, make_reservation, now, tomorrow
 ):
