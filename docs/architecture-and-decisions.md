@@ -739,10 +739,10 @@ súbor testov. Podrobne v C05.3.
 | Prechod | Owner rozhodnutia | Kto smie prechod iba vyžiadať |
 | ------- | ----------------- | ----------------------------- |
 | `DRAFT → CONFIRMED` | Reservation Lifecycle | Reservation API (na podnet študenta alebo vedúceho) |
-| `DRAFT → PENDING_APPROVAL` | Reservation Lifecycle | Reservation API; o tom, že sa ide touto vetvou, rozhoduje `Instrument.requires_approval` (`REQ-10`) |
+| `DRAFT → PENDING_APPROVAL` | Reservation Lifecycle | Reservation API; o tom, že sa ide touto vetvou, rozhoduje `Instrument.requires_approval` (`REQ-10`). Od v0.4 prechod zapíše aj **termín rozhodnutia** — ten istý strážca, v tom istom kroku (`DD-8`) |
 | `PENDING_APPROVAL → CONFIRMED` | **Reservation Lifecycle** (vstup do blokujúceho stavu) | **Approval Workflow** po kladnom rozhodnutí vedúceho |
 | `PENDING_APPROVAL → REJECTED` | Approval Workflow | Reservation API (vedúci) |
-| `PENDING_APPROVAL → EXPIRED` | **Reservation Lifecycle** (`expire_request_if_dead()`; od C05 rozhoduje `expiry_decision()` a zapisuje `_write_expired()` — `expire_request_if_dead()` je rozhranie pre Approval Workflow) | výslovne nikto — vyvolá ho plynutie času (`BR-08`); zapíše sa pri najbližšom zrušení (Reservation Lifecycle) alebo rozhodnutí (Approval Workflow), ktoré na žiadosť smeruje (`TBD-08`) |
+| `PENDING_APPROVAL → EXPIRED` | **Reservation Lifecycle** (`expire_request_if_dead()`; od C05 rozhoduje `expiry_decision()` a zapisuje `_write_expired()` — `expire_request_if_dead()` je rozhranie pre Approval Workflow) | výslovne nikto — vyvolá ho plynutie času: uplynutie termínu rozhodnutia (`BR-08`, od v0.4 skorší z *podanie + 48 h* a `starts_at`); zapíše sa pri najbližšom zrušení (Reservation Lifecycle) alebo rozhodnutí (Approval Workflow), ktoré na žiadosť smeruje (`TBD-08`) |
 | `DRAFT → CANCELLED`, `CONFIRMED → CANCELLED`, `PENDING_APPROVAL → CANCELLED` | Reservation Lifecycle | Reservation API (vlastník alebo vedúci) |
 
 Rozdiel medzi tretím a štvrtým riadkom je celý obsah ADR-01. Zamietnutie je
@@ -1682,3 +1682,110 @@ zmeny a `R-03` ostáva otvorené dovtedy, kým sa nedopíše celý `CR-08`.
   štart nad starou schémou (bez stĺpca s lehotou, bez obmedzenia `CA-6`)
   odmietne naštartovať s vetou, čo spraviť.
 - **`P4` z C07** (*Rozhodnúť o migráciách schémy pre CP2*) je týmto uzavretá.
+
+
+---
+
+# C09 — Návrh zmeny `CR-08` (lehota na rozhodnutie o žiadosti)
+
+Krok 2 ohraničenej delty z C08: ako sa špecifikácia v0.4 premietne do
+architektúry a detailného návrhu, **predtým** než sa napíše kód. Architektúra
+z C03 a jednotka z C05 sa nemenia v štruktúre — pribúda jeden údaj, jedno
+pravidlo v doméne a jedno obmedzenie v databáze. ADR-01 platí ďalej:
+nepribudol zapisovateľ ani proces (`CR-08`, varianta A).
+
+## DD-8 — Termín rozhodnutia sa ukladá ako jeden okamih
+
+**Otázka.** BR-08 v0.4 hovorí, že žiadosť je živá, kým `now <` termín
+rozhodnutia, a termín je skorší z *podanie + T* a `starts_at`. Čo presne
+uložiť?
+
+| Možnosť | Čo sa uloží | Živosť pri čítaní |
+| ------- | ----------- | ----------------- |
+| a | okamih podania | `now < min(podanie + T, starts_at)` — dve porovnania a T pri každom čítaní |
+| b | `podanie + T` (návrh analýzy dopadu C08) | `now < min(lehota, starts_at)` — dve porovnania |
+| **c** | **`min(podanie + T, starts_at)`** | **`now < decision_deadline`** — jedno porovnanie |
+
+**Rozhodnutie: c.** Stĺpec `reservations.decision_deadline` (`timestamptz`,
+nullable) obsahuje okamih, do ktorého musí vedúci rozhodnúť.
+
+Prečo:
+
+1. **Správanie je rovnaké.** `starts_at` sa po vytvorení rezervácie nemení
+   (žiadna operácia ho neprepisuje), takže `min` sa dá vypočítať raz pri
+   podaní a výsledok neskôr nezastará. `AC-04` aj `AC-05` platia doslova.
+2. **Je to presne údaj z `AC-06`** — „okamih, do ktorého musí vedúci
+   rozhodnúť". Odpoveď API ho vracia bez prepočtu.
+3. **Odstraňuje hlavné riziko varianty A.** C08 pomenovalo ako failure mode, že
+   sa dve formy živosti — predikát v politike a SQL v dotaze na prekryv —
+   rozídu. Pri možnosti c sú obe jediné porovnanie s tým istým stĺpcom; pri
+   a alebo b by každá forma musela správne zopakovať aj `min`.
+4. **`AC-10` platí bez ďalšieho kódu.** Termín je uložený, zmena T sa ho netýka.
+
+**Cena:** okamih podania sa samostatne nezachová. Ak bude treba na audit,
+je to ďalší stĺpec — `CR-08` ho nežiada.
+
+**Vzťah k analýze dopadu C08.** Matica odporúčala „ukladať priamo lehotu
+určenú pri podaní, nie okamih podania" — c je jej spresnenie, nie odchýlka:
+ukladá sa termín, ktorý z lehoty a `starts_at` vyplýva.
+
+## DD-9 — Obmedzenie v databáze stráži aj rovnocennosť
+
+Obmedzenie z `CA-6` (*žiadosť ⇒ termín vyplnený*) sa rozširuje o druhú
+podmienku:
+
+```sql
+CONSTRAINT ck_reservations_request_has_deadline CHECK (
+    state <> 'PENDING_APPROVAL'
+    OR (decision_deadline IS NOT NULL AND decision_deadline <= starts_at)
+)
+```
+
+Prvá polovica je `CA-6` — žiadosť bez termínu by bola v SQL „neblokujúca"
+(`NULL > now()` je neznáme), kým politika by ju mohla brať ako živú. Druhá
+polovica stráži predpoklad DD-8: keby niekto priamym SQL zapísal termín **po**
+`starts_at`, jediné porovnanie `decision_deadline > now` by žiadosť držalo
+živú aj po jej začiatku. Obmedzenie nevolá `now()`, takže námietka ADR-01 proti
+databázovému obmedzeniu sa naň nevzťahuje. Chráni aj zapisovateľov mimo API
+z inventára C08 (`conftest`, `demo.py`, skript TC).
+
+`decision_deadline` sa po rozhodnutí nemaže — pri `CONFIRMED`, `REJECTED`,
+`EXPIRED` aj `CANCELLED` ostáva ako záznam toho, dokedy sa malo rozhodnúť.
+Pri rezervácii, ktorá žiadosťou nikdy nebola, je `NULL`.
+
+## Kto čo počíta a zapisuje
+
+| Prvok | Zmena | Prečo práve tu |
+| ----- | ----- | -------------- |
+| `domain/rules.py` | `DECISION_PERIOD = 48 h` vedľa `CANCELLATION_LEAD_TIME` (`CA-5`); `decision_deadline(submitted_at, starts_at)` = `min(submitted_at + DECISION_PERIOD, starts_at)`; `approval_request_is_alive(decision_deadline, now)` = `now < decision_deadline` | časové pravidlá sú v doméne a mimo nej ich nikto nepoužíva (DD-1) |
+| `domain/transitions.py` | `expiry_decision(state, starts_at, decision_deadline, now)`, `cancel_decision(state, starts_at, decision_deadline, now)`; tvary `Decision` bez zmeny. Žiadosť bez termínu je chyba programu (`ValueError`), nie tichý predpoklad. Dôvod zamietnutia podľa príčiny: *uplynula lehota na rozhodnutie* / *termín rezervácie už začal* | politika rozhoduje, nepozná perzistenciu ani hodiny |
+| `confirm_decision()` | **bez zmeny** — o vetve `PENDING_APPROVAL` rozhoduje `requires_approval` ako doteraz | plán C08: „politika ostáva čistá" |
+| `enter_blocking_state()` | pri vstupe do `PENDING_APPROVAL` zapíše `decision_deadline = decision_deadline(now, starts_at)` — **pred** zápisom stavu, v tej istej transakcii | jediné miesto, kde vzniká blokujúci stav (ADR-01); termín je súčasť toho, čo `PENDING_APPROVAL` znamená. Poradie zápisu: obmedzenie DD-9 nie je odložiteľné, takže riadok nesmie byť ani na okamih `PENDING_APPROVAL` bez termínu |
+| `_overlapping_blocking()` | `or_(state == CONFIRMED, starts_at > now)` → `or_(state == CONFIRMED, decision_deadline > now)` | druhá forma živosti; vďaka DD-9 rovnocenná predikátu |
+| `cancel_reservation()`, `expire_request_if_dead()` | odovzdajú politike `reservation.decision_deadline` | vykonávajú, nerozhodujú |
+| `models.Reservation` | stĺpec `decision_deadline`, obmedzenie DD-9 | `Reservation Store` vlastní schému |
+| `db.verify_schema()` *(nové)* | pri štarte porovná schému s modelmi a pri rozchode odmietne štart | `ADR-02`; `Reservation Store` vlastní schému |
+| `api/reservations.py` | `ReservationResponse.decision_deadline` (`null`, ak žiadosťou nebola) | `AC-06`; aditívne pole, existujúci klienti sa nerozbijú |
+
+`check_availability()` a `decide_reservation()` sa nemenia — prvá číta živosť
+cez `_overlapping_blocking()`, druhá cez `expire_request_if_dead()`.
+
+## Úpravy statických kontrol architektúry
+
+| Kontrola | Zmena | Prečo |
+| -------- | ----- | ----- |
+| `TRANSITION_TIME_RULES` | + `DECISION_PERIOD` | lehota sa nesmie použiť mimo domény (DD-1). `decision_deadline()` do zoznamu nepatrí: neposudzuje prechod, iba určí údaj, ktorý sa uloží — volá ju strážca |
+| `_mentions_time()` | + atribút `decision_deadline` | operácia, ktorá by termín porovnala sama, by inak prešla kontrolou DD-1 (nález C08) |
+| `FORBIDDEN_FOR_POLICY` | + `swilab.config` | samostatný nález review C08: politika by si dnes mohla prečítať konfiguráciu a sada by ostala zelená |
+
+## Kontrola schémy pri štarte (`ADR-02`)
+
+`verify_schema()` porovná modely s databázou a vráti zoznam rozdielov:
+chýbajúce tabuľky a stĺpce, typ a nullability každého stĺpca, hodnoty enumov,
+pomenované `CHECK` obmedzenia z modelov (teda aj DD-9). Typ sa porovnáva tak, že
+sa typ z modelu aj typ z databázy preložia tým istým dialektom — overené proti
+skutočnej schéme pred zapísaním tohto návrhu. Stĺpce a obmedzenia, ktoré
+v databáze sú navyše, rozdielom nie sú.
+
+Pri rozchode aplikácia nenaštartuje a vypíše, čo nesedí, a postup z `ADR-02`:
+`docker compose down && docker compose up -d --wait db`.
