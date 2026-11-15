@@ -273,12 +273,13 @@ def test_at_most_one_operation_leaves_the_source_state(
     session, new_session, make_instrument, make_user, make_certification,
     make_reservation, start_barrier, rival, source_state,
 ):
-    """REQ-16 doslova: ked sa zrusenie stretne s potvrdenim alebo so
-    schvalenim tej istej rezervacie, uspeje NAJVIAC JEDNO a druhe skonci
-    zamietnutim podla uz zmeneneho zdrojoveho stavu.
+    """REQ-16 (v0.3) spolu s BR-03: ked sa zrusenie stretne s potvrdenim
+    alebo so schvalenim tej istej rezervacie, druha operacia sa posudi podla
+    uz zmeneneho zdrojoveho stavu.
 
-    Termin je o 30 minut, teda vnutri lehoty BR-03. Preto plati "najviac
-    jedno" pri OBOCH poradiach:
+    Termin je o 30 minut, teda vnutri lehoty BR-03. Preto tu z REQ-16
+    vyplyva "uspeje najviac jedno" pri OBOCH poradiach (do v0.2 to bola
+    doslovna veta REQ-16; v0.3 ju odstranila, lebo mimo lehoty neplati):
       vyhra confirm/approve -> CONFIRMED, cancel zamietnuty TOO_LATE
       vyhra cancel          -> CANCELLED, confirm/approve INVALID_STATE
     Strateny zapis sa prejavi ako ['OK', 'OK'] pri kazdom poradi zapisov,
@@ -326,7 +327,8 @@ def test_at_most_one_operation_leaves_the_source_state(
         }
         assert (rival_outcome, cancel_outcome) in legal, (
             f"kolo {round_index}: {rival}={rival_outcome}, cancel={cancel_outcome} - "
-            f"REQ-16 dovoluje uspech najviac jednej operacie"
+            f"REQ-16 (v0.3) + BR-03 dovoluju vnutri lehoty uspech najviac "
+            f"jednej operacie"
         )
         assert final_state is legal[(rival_outcome, cancel_outcome)], (
             f"kolo {round_index}: vysledky ({rival}={rival_outcome}, "

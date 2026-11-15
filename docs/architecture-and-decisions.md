@@ -1565,3 +1565,120 @@ vzniklo vnútri tejto ochrany.
   stav iný než `PENDING_APPROVAL`, zápis `REJECTED`). Je mimo vybranej
   jednotky. To isté rozdelenie na rozhodnutie a vykonanie by sa naň dalo
   použiť; tento návrh ho nerobí.
+
+---
+
+# Podmienky pred kódom v C09
+
+Rozhodnutie `ACCEPT` pri `CR-08` ([intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08))
+má štyri podmienky. Prvé dve splnilo peer review. Tretia je rozhodnutie
+o migráciách — `ADR-02` nižšie. Štvrtá je schválená špecifikácia; `CR-08` ide
+do v0.4, pretože v0.3 uzatvára nález `F-03` (dôvod je v `ADR-02`, časť
+*Vzťah k v0.3*).
+
+## ADR-02 — Migrácie schémy pred zmenou v C09
+
+**Stav:** prijaté 2026-11-15. Rozhoduje riziko `R-04` a uzatvára akciu `P4` z C07. Samotné riziko ostáva otvorené, kým kontrola schémy pri štarte nie je implementovaná (pozri `R-04` v registri).
+
+### Kontext
+
+Schéma vzniká `Base.metadata.create_all()` pri štarte aplikácie
+(`main.py`, lifespan). Migrácie projekt nemá — je to prijatý dôsledok z C02,
+kde by boli predčasnou architektúrou, a od C07 je to riziko `R-04` so
+spúšťačom „akákoľvek zmena v `models.py`".
+
+**Spúšťač nastal.** `CR-08` pridáva do `reservations` stĺpec s lehotou na
+rozhodnutie. Dovtedy to bolo hypotetické.
+
+Tri fakty, ktoré rozhodnutie určujú:
+
+1. **Databáza nemá volume.** `docker-compose.yml` nedefinuje žiadny
+   `volumes:` — dáta žijú iba v kontajneri. `docker compose down` ich zmaže.
+   **Dnes teda neexistuje žiadna databáza s dátami, ktorú by bolo treba
+   migrovať.**
+2. **`create_all()` existujúcu tabuľku nezmení.** Aplikácia nad starou
+   schémou naštartuje bez chyby a až **každá požiadavka** na `reservations`
+   skončí `500` pre chýbajúci stĺpec. Zlyhanie je neskoré a nezrozumiteľné —
+   presne v okamihu živej ukážky.
+3. **Prestavba je sekundová a je vyskúšaná.** `docker compose down &&
+   docker compose up -d --wait db` je contingency zapísaná pri `R-04`, raz
+   použitá pri C02 časti B.
+
+### Rozhodovacia otázka
+
+> Má projekt pred zmenou schémy v C09 zaviesť migrácie, alebo ostať pri
+> `create_all()` a prestavbe — a čo potom chráni pred tichým rozchodom kódu
+> a schémy?
+
+### Alternatívy
+
+**A — zaviesť migrácie (Alembic).** Nová závislosť, `alembic/` s prostredím,
+revízia pre `CR-08`, a aby to malo zmysel, aj test, že `upgrade` prebehne nad
+neprázdnou databázou.
+
+**B — ostať pri `create_all()` + rýchle zlyhanie pri štarte + zapísaná
+prestavba.** Aplikácia si pri štarte porovná schému s modelmi a pri rozchode
+odmietne naštartovať s vetou, čo treba spraviť. Postup prestavby je v README.
+
+| Kritérium | A — migrácie | B — rýchle zlyhanie + prestavba |
+| --------- | ------------ | ------------------------------- |
+| Rieši dnešný problém (tichý rozchod → `500`) | Áno, ak sa migrácia spustí. Keď ju niekto zabudne, zlyhanie je rovnako neskoré ako dnes — iba ak by aj A dostala kontrolu pri štarte (aktuálna revízia proti poslednej). Kontrola pri štarte je teda nezávislá od voľby A/B; rozhoduje riadok o dátach nižšie. | **Áno vždy** — aplikácia s nesediacou schémou nenaštartuje. |
+| Zachová dáta pri zmene schémy | Áno. | Nie — prestavba ich zmaže. |
+| **Sú nejaké dáta, o ktoré ide?** | — | **Nie.** Bez volume neprežijú ani reštart kontajnera. Výhoda A je dnes teoretická. |
+| `AC-09` (žiadosť spred zmeny) | Prirodzene: migrácia doplní lehotu starým riadkom (= `starts_at`). | Žiadosti spred zmeny prestavbu neprežijú, takže `AC-09` sa pri B v praxi neuplatní — overí sa iba ako pravidlo: žiadosť s lehotou = `starts_at` sa správa ako vo v0.2. **`NULL` nie je platná lehota žiadosti:** obmedzenie z `CA-6` (potvrdené v PR #11) ostáva a chráni aj priamy SQL zápis. Bez neho by sa rozišli obe formy živosti — v SQL je `NULL > now` neznáme, teda „neblokuje". |
+| Rollback `CR-08` (`UPDATE`, potom starý kód) | Skriptovateľný ako `downgrade`. | Ručný postup zapísaný v release zázname; vyskúšať ho treba tak či tak. |
+| Cena | Závislosť, prostredie, revízia ku každej zmene schémy, nový test. | Jedna kontrola pri štarte, jedna sekcia v README. |
+| Riziko, ktoré pridáva | Rozídená história revízií a databáza, ktorú žiadna revízia nepopisuje. | Zmazanie dát pri prestavbe — dnes bez dôsledku, pri prvom volume vážne. |
+
+### Rozhodnutie
+
+**B.** Migrácie nezavádzame. Namiesto toho:
+
+1. aplikácia pri štarte porovná schému s modelmi a pri rozchode **odmietne
+   naštartovať** s vetou, ktorá povie, čo spraviť (nahrádza `500` pri každej
+   požiadavke). Porovnáva tabuľky, stĺpce (typ a nullability), hodnoty enumov
+   a pomenované obmedzenia — vrátane obmedzenia z `CA-6`. Kontrola iba nad
+   stĺpcami by pustila databázu bez neho alebo so starým enumom (zmena v0.2
+   pridávala hodnoty do `reservation_state`),
+2. postup prestavby databázy je v README ako súčasť `CR-08`,
+3. postup rollbacku `CR-08` ostáva ručný a zapísaný v release zázname.
+
+Dôvod je jediný a je faktický: **migrácia je nástroj na zachovanie dát a tento
+projekt dnes žiadne dáta nezachováva.** Zaviesť ju teraz znamená zaplatiť
+plnú cenu za vlastnosť, ktorú nemá čo chrániť, a pritom nezavrieť problém,
+ktorý `CR-08` skutočne prináša — ten zavrie až kontrola pri štarte.
+
+### Spúšťač na prehodnotenie (`A`)
+
+Ktorékoľvek z toho:
+
+- do `docker-compose.yml` pribudne `volumes:` pre databázu,
+- projekt sa nasadí kdekoľvek, odkiaľ sa dáta nedajú zahodiť,
+- objaví sa druhá inštancia alebo prostredie, ktoré nejde prestaviť naraz s kódom.
+
+Dovtedy je `R-04` prijaté s contingency; po spúšťači sa otvára znova a `ADR-02`
+sa nahrádza.
+
+### Vzťah k v0.3
+
+`CR-08` a nález `F-03` mierili na tú istú verziu špecifikácie. Tím ich
+**rozdeľuje**:
+
+- **v0.3 = `F-03`** — oprava chyby v schválenej v0.2 (`REQ-16` si protirečí
+  s OP-04). Nemení správanie ani testy, dá sa uzavrieť hneď a tým zavrie
+  riziko `R-03`, ktoré má dnes skutočné reziduálne riziko `NOT VERIFIED`.
+- **v0.4 = `CR-08`** — nová požiadavka. Píše sa ako krok 1 delty v C09, pred
+  kódom.
+
+Dôvod: oprava chyby nemá čakať na novú požiadavku. Zmiešať ich do jednej
+verzie znamená, že kontrola konzistencie v jednom kroku rieši dve nesúvisiace
+zmeny a `R-03` ostáva otvorené dovtedy, kým sa nedopíše celý `CR-08`.
+
+### Dôsledky
+
+- **Prijaté:** prestavba databázy zmaže dáta. Dnes bez dôsledku, po spúšťači nie.
+- **Pre C09:** kontrola schémy pri štarte je súčasťou delty `CR-08` — pribúda
+  k riadku *`create_all()` pri štarte* v analýze dopadu, spolu s testom:
+  štart nad starou schémou (bez stĺpca s lehotou, bez obmedzenia `CA-6`)
+  odmietne naštartovať s vetou, čo spraviť.
+- **`P4` z C07** (*Rozhodnúť o migráciách schémy pre CP2*) je týmto uzavretá.

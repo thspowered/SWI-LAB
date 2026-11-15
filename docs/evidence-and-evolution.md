@@ -1093,11 +1093,11 @@ Je to jediná hranica v systéme, ktorú nestrážime. Pri `BR-01`, `BR-03`, `BR
 | **Expected** | Jedno konzistentné čítanie naprieč špecifikáciou. |
 | **Observed** | OP-04 pripúšťa, že po víťaznom potvrdení sa zrušenie posúdi podľa nového stavu a ďaleko pred začiatkom **legitímne uspeje**. Obe operácie teda uspejú. |
 | **Verify** | Potvrdené čítaním špecifikácie. Rozpor sme našli sami už v C03 (nález N-07, riziko 6) a zopakovali v C05 (riziko 9); testy pokrývajú **obe** čítania. |
-| **Disposition** | **VERIFIED FINDING · DEFER** — ale s uznaním, že odklad je sám o sebe nález. |
-| **Prečo DEFER** | Je to zmena **špecifikácie**, nie architektúry ani kódu. Správanie systému je definované a otestované; mení sa znenie požiadavky, a to patrí do v0.3 s analýzou dopadu, nie do opravy na poslednú chvíľu pred obhajobou. |
+| **Disposition** | **VERIFIED FINDING · ACCEPT — uzavreté v špecifikácii v0.3 (2026-11-15).** Pôvodne DEFER, s uznaním, že odklad je sám o sebe nález. |
+| **Prečo pôvodne DEFER** | Je to zmena **špecifikácie**, nie architektúry ani kódu. Správanie systému je definované a otestované; mení sa znenie požiadavky, a to patrí do v0.3 s analýzou dopadu, nie do opravy na poslednú chvíľu pred obhajobou. |
 | **Čo review dodalo** | Upozornenie, ktoré sme si sami nevšimli: špecifikácia je naďalej označená ako **schválená** (§11), tabuľka konzistencie v §9 rozpor neuvádza a README v C02 DoD tvrdí „text, požiadavky a oba pohľady sú vzájomne konzistentné". Dokumenty teda tvrdia konzistenciu, o ktorej vieme, že neplatí. |
 | **Action / owner** | **Návrh tímu: baseline v0.3** — preformulovať `REQ-16` na to, čo OP-04 aj implementácia skutočne garantujú: „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom blokuje prístroj". Kód ani testy sa nemenia — toto čítanie už tvrdí `test_concurrent_cancel_and_confirm_on_same_reservation`. Mení sa znenie požiadavky, preto v0.3 s analýzou dopadu a schválením, nie tichá oprava. Owner: Tomáš Krišica, do 2026-11-09. |
-| **Closure evidence** | **Otvorené.** Medzikrok hotový: §9 špecifikácie, hlavička špecifikácie a C02 DoD v README teraz rozpor uvádzajú, takže dokumenty už netvrdia konzistenciu, ktorá neplatí. Riziko `R-03`. |
+| **Closure evidence** | **Uzavreté.** Špecifikácia **v0.3**: `REQ-16` zúžená na záruku, ktorú `OP-04` a implementácia dávajú; kontrola konzistencie na konci §9 prepísaná z *otvoreného rozporu* na *vyriešený*; §10 a príklad overenia pri OP-03 zosúladené; §11 nesie schválenie v0.3 oboma členmi; C02 DoD v README už výnimku neuvádza. Správanie sa nezmenilo — `253 passed`; v testoch sa zmenil iba docstring a hlásenie `test_at_most_one_operation_leaves_the_source_state`, ktoré citovali odstránenú vetu `REQ-16`. Riziko `R-03` uzavreté. |
 
 ### Kandidát, ktorý review samo zamietlo
 
@@ -1190,19 +1190,24 @@ plán skóre neznižuje.
 - **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**. `L=2`: rozpor prešiel dvoma
   checkpointmi bez dôsledku, ale pri treťom sa naň už pýtali.
 - **Stratégia:** MITIGATE — rozhodnúť, nie ďalej odkladať.
-- **Opatrenie / owner / termín:** tím navrhuje v0.3 — `REQ-16` preformulovať
-  podľa OP-04 (pozri F-03), s analýzou dopadu a schválením. Medzikrok hotový:
-  rozpor je uvedený v §9, v hlavičke špecifikácie aj v C02 DoD v README.
-  Owner: Tomáš Krišica, do 2026-11-09.
-- **Dôkaz účinnosti:** špecifikácia v0.3 s novým znením `REQ-16`, analýza
-  dopadu, aktualizovaná tabuľka konzistencie v §9; `pytest` bez zmeny testov
-  zelený. Stav: **neoverené** — v0.3 zatiaľ neexistuje.
+- **Opatrenie / owner / termín:** **vykonané 2026-11-15** — špecifikácia v0.3
+  zúžila `REQ-16` podľa OP-04 (pozri F-03). Owner: Tomáš Krišica; termín
+  z C07 bol 2026-11-09, prekročený o šesť dní.
+- **Dôkaz účinnosti:** v0.3 s novým znením `REQ-16`; rozbor dopadu v kontrole
+  konzistencie na konci §9; §10, príklad overenia pri OP-03 a C02 DoD v README
+  zosúladené; §11 nesie schválenie oboma členmi. `pytest` **`253 passed` bez
+  zmeny správania testov** (upravený iba text jedného docstringu a hlásenia,
+  ktoré citovali odstránenú vetu) — zmena znenia, nie správania.
+  Stav: **overené**.
 - **Očakávané reziduálne:** L=1, I=2 → LOW (2).
-- **Skutočné reziduálne:** **NOT VERIFIED.**
-- **Prijatie:** rozhodnutie tímu, nie jednotlivca.
+- **Skutočné reziduálne:** **LOW (2) — overené.** Rozpor v schválenej baseline
+  už nie je; zostáva bežné riziko, že budúca zmena `REQ-16`, OP-03 alebo OP-04
+  zavedie nový.
+- **Prijatie:** rozhodnutie tímu — v0.3 schválili obaja členovia (§11).
 - **Monitoring / trigger:** akákoľvek ďalšia zmena `REQ-16`, OP-03 alebo OP-04.
-- **Doplnené v C08:** CR-08 mieri na tú istú verziu špecifikácie (v0.3);
-  tím rozhodne, či pôjdu spolu. Stav R-03 sa tým nemení — v0.3 stále neexistuje.
+- **Doplnené v C08:** `CR-08` mierilo na tú istú verziu špecifikácie. Tím
+  zmeny **rozdelil** (`ADR-02`): v0.3 je oprava `F-03`, `CR-08` ide do v0.4.
+  Oprava chyby tým nečakala na novú požiadavku a `R-03` sa dalo uzavrieť hneď.
 
 ### R-04 — prevádzka: schéma bez migrácií
 
@@ -1215,21 +1220,28 @@ plán skóre neznižuje.
   pravdepodobne prinesie.
 - **Stratégia:** ACCEPT pre CP1 s contingency, MITIGATE pred CP2.
 - **Opatrenie / owner / termín:** pre CP1 pripravená a vyskúšaná postupnosť
-  `docker compose down && docker compose up -d --wait db` pred ukážkou; migrácie
-  ako samostatné rozhodnutie pre CP2 — zapísať do 2026-11-09, vykonať podľa
-  plánu CP2 (R-05). Owner: Tomáš Hrubý.
+  `docker compose down && docker compose up -d --wait db` pred ukážkou.
+  **Rozhodnutie o migráciách padlo 2026-11-15 — `ADR-02`**
+  ([architecture-and-decisions.md](architecture-and-decisions.md#adr-02--migrácie-schémy-pred-zmenou-v-c09)):
+  migrácie sa nezavádzajú, lebo databáza nemá volume a žiadne dáta nezachováva.
+  Namiesto nich aplikácia pri štarte odmietne naštartovať nad nesediacou
+  schémou — implementuje sa v C09 ako súčasť delty `CR-08`. Owner: Tomáš Hrubý.
 - **Dôkaz účinnosti:** prestavba databázy nás už raz zasiahla pri C02 časti B
   a postup je zapísaný v PR #5. Pre CP1 teda **overené ako contingency**,
   nie ako odstránenie príčiny.
 - **Očakávané reziduálne:** L=2, I=2 → MEDIUM (4) pre CP1.
-- **Skutočné reziduálne:** MEDIUM (4) pre CP1 — contingency je vyskúšaná;
-  pre CP2 **NOT VERIFIED**, migrácie neexistujú.
+- **Skutočné reziduálne:** MEDIUM (4) pre CP1 — contingency je vyskúšaná.
+  Pre CP2 **NOT VERIFIED**: rozhodnutie je prijaté, ale kontrola schémy pri
+  štarte ešte nie je implementovaná. Plán opatrenie neznižuje.
 - **Prijatie:** Tomáš Hrubý pre CP1.
-- **Monitoring / trigger:** akákoľvek zmena v `models.py`.
-- **Doplnené v C08:** trigger sa spúšťa — CR-08 pridáva do `reservations`
-  údaj o podaní žiadosti. Rozhodnutie o migráciách je preto **podmienkou
-  ACCEPT** a musí padnúť pred kódom v C09. Plán (zapísať do 2026-11-09)
-  v repozitári stále nie je; reziduálne riziko pre CP2 ostáva **NOT VERIFIED**.
+- **Monitoring / trigger:** akákoľvek zmena v `models.py`. Po `ADR-02`
+  pribúda spúšťač na prehodnotenie celého rozhodnutia: `volumes:` pre databázu
+  v `docker-compose.yml`, nasadenie, odkiaľ sa dáta nedajú zahodiť, alebo druhá
+  inštancia aplikácie.
+- **Doplnené v C08:** trigger sa spustil — `CR-08` pridáva do `reservations`
+  stĺpec s lehotou. Rozhodnutie bolo **podmienkou ACCEPT** a padlo pred kódom
+  v C09 (`ADR-02`, 2026-11-15). Akcia `P4` z C07 je tým uzavretá; termín
+  2026-11-09 z C07 bol prekročený o šesť dní.
 
 ### R-05 — harmonogram: pre CP2 nie je v repozitári zaznamenaný plán
 
@@ -1512,7 +1524,7 @@ ju AC-09 považovalo za žiadosť spred zmeny a ostala by živá; krok 2 nájde
 stĺpec s lehotou; krok 3 → `AVAILABLE`; krok 4 → `B2` prejde do
 `PENDING_APPROVAL`; krok 5 → `409 EXPIRED`; krok 6 → `B1 EXPIRED`,
 `B2 PENDING_APPROVAL`. Nezávislý SQL oracle BR-02 v skripte treba prepísať na
-pravidlo v0.3.
+pravidlo v0.4.
 **Čo nie je pokryté:** hranica 48:00:00 — na baseline neexistuje, overí ju
 až C09 (AC-04).
 
