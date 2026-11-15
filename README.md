@@ -203,11 +203,83 @@ Stavy, kódy zamietnutí ani HTTP statusy sa v C05 nemenili — mení sa vnútro
 jednej jednotky. Pred review v tíme prešla vetva tromi nezávislými kontrolami;
 čo našli a čo sa po nich zmenilo, je v evidence.
 
+## C08 — Controlled Change
+
+Zmena `CR-08` — **lehota na rozhodnutie o žiadosti** (48 h od podania). V C08
+sa kód nemení: vzniká rozhodnutie a plán overenia, implementácia je C09.
+
+*Pozor na dve „C08".* `docs/SWI-LAB_C08_Project_Status.pptx` a register rizík
+označený „C07/C08" patria k Project Status Reportu z predošlého zadania
+(prezentácia 2026-11-02). Táto časť je zadanie C08 **Controlled Change**.
+
+- Change Request, analýza dopadu, varianty, rozhodnutie a odovzdanie do C09:
+  [docs/intent-and-change.md, časť C08](docs/intent-and-change.md#c08--controlled-change-cr-08)
+- baseline a test cases s výsledkami:
+  [docs/evidence-and-evolution.md, časť C08](docs/evidence-and-evolution.md#c08--controlled-change-baseline-a-overenie-dnešného-správania)
+
+**Východisková baseline:** commit `b0974e7` (`main`), špecifikácia v0.2.
+Obnovenie rovnakého stavu — z vetvy C08, lebo na samotnom `b0974e7` ešte nie je
+skript s test cases; kód aplikácie je na vetve rovnaký ako na `b0974e7`:
+
+```bash
+git checkout feature/c08-controlled-change
+git diff --stat b0974e7 -- src tests pyproject.toml docker-compose.yml   # prázdne
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp .env.example .env
+docker compose up -d --wait db
+.venv/bin/python -m pytest -q                 # 253 passed
+.venv/bin/python scripts/mutation_check.py    # 34 mutácií, 0 prežilo
+```
+
+Test cases `TC-C08-01..03` proti **bežiacej** aplikácii — operácie cez HTTP,
+stav číta skript novým spojením priamo z databázy:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m uvicorn swilab.main:app --port 8000 &
+.venv/bin/python scripts/c08_baseline_tc.py   # 3× PASS, návratový kód 0
+```
+
+Skript robí `TRUNCATE` všetkých tabuliek — nespúšťať súčasne s `pytest` ani
+s `mutation_check.py`. Ak aplikácia alebo databáza nebeží alebo vypadne počas
+behu, verdikt je `BLOCKED` (návratový kód 2), nie `FAIL`.
+
+## C08 Definition of Done
+
+- [x] jednoznačná východisková baseline a zrozumiteľné before správanie —
+  [evidence, krok 0](docs/evidence-and-evolution.md#krok-0--východisková-baseline-before);
+  obmedzenie, ktoré CR mení, doložené behom `TC-C08-03`
+- [x] dva krokované test cases so špecifikovanými dátami a Expected pred
+  vykonaním — `TC-C08-01`, `TC-C08-02` (+ `TC-C08-03`); Expected v `bbfbcfe`,
+  prvý beh o 10 s neskôr
+- [x] skutočne spustené na reálnej hranici a perzistencii — všetky tri cez HTTP
+  API nad PostgreSQL, stav čítaný priamo z databázy, dva behy po resete;
+  kontrolné behy: vložená chyba → `FAIL`, nebežiaca aplikácia → `BLOCKED`
+- [x] jeden vierohodný CR — `CR-08` so zdrojom a dokladom potreby (C02 R-2, I-01)
+- [x] Impact Matrix v relevantných oblastiach so zdôvodneným NO IMPACT,
+  vrátane inventára zapisovateľov (worker, import, admin neexistujú; priamy SQL áno)
+- [x] Options Matrix porovnávajúca reálne reakcie — päť variant vrátane
+  „bez zmeny kódu" a dôsledku nečinnosti
+- [x] **peer-reviewed rozhodnutie** — ACCEPT, varianta A so zmenou `CA-5`
+  (T je konštanta, nie konfigurácia). Review T. Krišicu vykonané 2026-11-15
+  v [PR #11](https://github.com/thspowered/SWI-LAB/pull/11): `CA-1` až `CA-4`,
+  `CA-6`, `CA-7` potvrdené vrátane prijatia za rolu vedúceho
+- [x] **obnovenie baseline druhým členom** — T. Krišica 2026-11-15 na vlastnom
+  stroji: `253 passed`, 34 mutácií / 0 prežilo, `TC-C08-01..03` 3× `PASS`,
+  zhodný odtlačok schémy; zopakované aj obe kontroly oracle
+- [x] ACCEPT handoff do C09 — ohraničená delta, nový oracle, regresia,
+  riziká `R-06`, `R-07`, stav PLANNED; pred kódom v C09 ostávajú dve
+  podmienky ACCEPT: rozhodnutie o migráciách (`R-04`) a schválená v0.3
+- [x] odkazy na existujúce živé dokumenty, evidence a známe obmedzenia —
+  CR v `intent-and-change.md`, test cases v `evidence-and-evolution.md`,
+  príkazy tu; žiadny nový dokument, pribudol iba skript `scripts/c08_baseline_tc.py`
+
+V C08 sa kód aplikácie nemenil: `git diff b0974e7 -- src tests` je prázdny.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
 - [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
-- [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
+- [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure, C08 Change Request `CR-08`
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia, architektúra C03 (ADR-01), detailed design C05
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03 a C05
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03, C05, C07 (nálezy, register rizík) a C08 (baseline, test cases)
