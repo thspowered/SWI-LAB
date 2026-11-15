@@ -1215,21 +1215,28 @@ plán skóre neznižuje.
   pravdepodobne prinesie.
 - **Stratégia:** ACCEPT pre CP1 s contingency, MITIGATE pred CP2.
 - **Opatrenie / owner / termín:** pre CP1 pripravená a vyskúšaná postupnosť
-  `docker compose down && docker compose up -d --wait db` pred ukážkou; migrácie
-  ako samostatné rozhodnutie pre CP2 — zapísať do 2026-11-09, vykonať podľa
-  plánu CP2 (R-05). Owner: Tomáš Hrubý.
+  `docker compose down && docker compose up -d --wait db` pred ukážkou.
+  **Rozhodnutie o migráciách padlo 2026-11-15 — `ADR-02`**
+  ([architecture-and-decisions.md](architecture-and-decisions.md#adr-02--migrácie-schémy-pred-zmenou-v-c09)):
+  migrácie sa nezavádzajú, lebo databáza nemá volume a žiadne dáta nezachováva.
+  Namiesto nich aplikácia pri štarte odmietne naštartovať nad nesediacou
+  schémou — implementuje sa v C09 ako súčasť delty `CR-08`. Owner: Tomáš Hrubý.
 - **Dôkaz účinnosti:** prestavba databázy nás už raz zasiahla pri C02 časti B
   a postup je zapísaný v PR #5. Pre CP1 teda **overené ako contingency**,
   nie ako odstránenie príčiny.
 - **Očakávané reziduálne:** L=2, I=2 → MEDIUM (4) pre CP1.
-- **Skutočné reziduálne:** MEDIUM (4) pre CP1 — contingency je vyskúšaná;
-  pre CP2 **NOT VERIFIED**, migrácie neexistujú.
+- **Skutočné reziduálne:** MEDIUM (4) pre CP1 — contingency je vyskúšaná.
+  Pre CP2 **NOT VERIFIED**: rozhodnutie je prijaté, ale kontrola schémy pri
+  štarte ešte nie je implementovaná. Plán opatrenie neznižuje.
 - **Prijatie:** Tomáš Hrubý pre CP1.
-- **Monitoring / trigger:** akákoľvek zmena v `models.py`.
-- **Doplnené v C08:** trigger sa spúšťa — CR-08 pridáva do `reservations`
-  údaj o podaní žiadosti. Rozhodnutie o migráciách je preto **podmienkou
-  ACCEPT** a musí padnúť pred kódom v C09. Plán (zapísať do 2026-11-09)
-  v repozitári stále nie je; reziduálne riziko pre CP2 ostáva **NOT VERIFIED**.
+- **Monitoring / trigger:** akákoľvek zmena v `models.py`. Po `ADR-02`
+  pribúda spúšťač na prehodnotenie celého rozhodnutia: `volumes:` pre databázu
+  v `docker-compose.yml`, nasadenie, odkiaľ sa dáta nedajú zahodiť, alebo druhá
+  inštancia aplikácie.
+- **Doplnené v C08:** trigger sa spustil — `CR-08` pridáva do `reservations`
+  stĺpec s lehotou. Rozhodnutie bolo **podmienkou ACCEPT** a padlo pred kódom
+  v C09 (`ADR-02`, 2026-11-15). Akcia `P4` z C07 je tým uzavretá; termín
+  2026-11-09 z C07 bol prekročený o šesť dní.
 
 ### R-05 — harmonogram: pre CP2 nie je v repozitári zaznamenaný plán
 
