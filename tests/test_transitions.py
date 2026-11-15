@@ -46,6 +46,17 @@ def _starts(lead: timedelta) -> datetime:
     return NOW + lead
 
 
+def _deadline(state, starts_at: datetime) -> datetime | None:
+    """Termin rozhodnutia pre tabulky z C05 (BR-08 v0.4, DD-8).
+
+    Tabulky C05 overuju ziadost, ktorej termin rozhodnutia je jej starts_at:
+    ziadost spred v0.4 (AC-09) alebo podana menej nez 48 h pred zaciatkom
+    (AC-05). Hranicu 48 h overuju testy v0.4 nizsie. Pri inych stavoch
+    politika termin necita - testy to overuju samostatne.
+    """
+    return starts_at if state == S.PENDING_APPROVAL else None
+
+
 # =========================================================================
 # Rozhodovacie tabulky (C05.8)
 # =========================================================================
@@ -73,7 +84,10 @@ def _starts(lead: timedelta) -> datetime:
     ],
 )
 def test_cancel_decision_table(state, lead, target, rejection, case):
-    decision = cancel_decision(state, _starts(lead), NOW)
+    starts_at = _starts(lead)
+    decision = cancel_decision(
+        state, starts_at, NOW, decision_deadline=_deadline(state, starts_at)
+    )
 
     assert (decision.target, decision.rejection) == (target, rejection), case
 
@@ -86,7 +100,8 @@ def test_cancel_decision_depends_on_time_only_where_the_table_says_so(state):
     decisions = {
         (decision.target, decision.rejection)
         for decision in (
-            cancel_decision(state, _starts(lead), NOW) for lead in LEADS
+            cancel_decision(state, _starts(lead), NOW, decision_deadline=None)
+            for lead in LEADS
         )
     }
 
@@ -129,8 +144,11 @@ def test_confirm_decision_judges_state_before_time(state, lead, requires_approva
     ("lead", "expires"), [(TICK, False), (ZERO, True), (-HOUR, True)]
 )
 def test_expiry_decision_boundary(lead, expires):
-    """BR-08: hranica je ostra - v okamihu starts_at uz ziadost neplati."""
-    decision = expiry_decision(S.PENDING_APPROVAL, _starts(lead), NOW)
+    """BR-08: hranica je ostra - v okamihu starts_at uz ziadost neplati
+    (ziadost s terminom rozhodnutia v starts_at, AC-05)."""
+    decision = expiry_decision(
+        S.PENDING_APPROVAL, _starts(lead), NOW, decision_deadline=_starts(lead)
+    )
 
     expected = (S.EXPIRED, ErrorCode.EXPIRED) if expires else (None, None)
     assert (decision.target, decision.rejection) == expected
@@ -138,8 +156,12 @@ def test_expiry_decision_boundary(lead, expires):
 
 @pytest.mark.parametrize("state", [s for s in S if s is not S.PENDING_APPROVAL])
 def test_only_a_pending_request_expires(state):
-    """N-05: DRAFT nevyprsi. Ostatne stavy tiez nie - ani po zaciatku."""
-    decision = expiry_decision(state, _starts(-HOUR), NOW)
+    """N-05: DRAFT nevyprsi. Ostatne stavy tiez nie - ani po zaciatku,
+    ani s terminom rozhodnutia v minulosti (napr. schvalena ziadost si ho
+    nesie ako historiu, DD-9)."""
+    decision = expiry_decision(
+        state, _starts(-HOUR), NOW, decision_deadline=_starts(-HOUR)
+    )
 
     assert (decision.target, decision.rejection) == (None, None)
 
@@ -148,8 +170,12 @@ def test_only_a_pending_request_expires(state):
 def test_cancel_takes_its_expiry_row_from_expiry_decision(lead):
     """C05.8: vyprsanie ma JEDNO znenie pre OP-04 aj OP-05. Keby zrusenie
     malo vlastnu kopiu podmienky, mohli by sa na hranici rozist."""
-    expiry = expiry_decision(S.PENDING_APPROVAL, _starts(lead), NOW)
-    cancel = cancel_decision(S.PENDING_APPROVAL, _starts(lead), NOW)
+    expiry = expiry_decision(
+        S.PENDING_APPROVAL, _starts(lead), NOW, decision_deadline=_starts(lead)
+    )
+    cancel = cancel_decision(
+        S.PENDING_APPROVAL, _starts(lead), NOW, decision_deadline=_starts(lead)
+    )
 
     if expiry.target is S.EXPIRED:
         assert cancel == expiry
@@ -179,8 +205,13 @@ def _every_decision():
     for state in S:
         for lead in LEADS:
             starts_at = _starts(lead)
-            yield "cancel", state, lead, cancel_decision(state, starts_at, NOW)
-            yield "expiry", state, lead, expiry_decision(state, starts_at, NOW)
+            deadline = _deadline(state, starts_at)
+            yield "cancel", state, lead, cancel_decision(
+                state, starts_at, NOW, decision_deadline=deadline
+            )
+            yield "expiry", state, lead, expiry_decision(
+                state, starts_at, NOW, decision_deadline=deadline
+            )
             for requires_approval in (False, True):
                 yield "confirm", state, lead, confirm_decision(
                     state, starts_at, NOW, requires_approval=requires_approval
@@ -223,7 +254,7 @@ def test_cancel_table_has_no_default_row():
     predvoleny vysledok by novy stav bud zrusil, alebo zamietol - a ani
     jedno by nikto nerozhodol."""
     with pytest.raises(AssertionError):
-        cancel_decision("COMPLETED", _starts(HOUR), NOW)
+        cancel_decision("COMPLETED", _starts(HOUR), NOW, decision_deadline=None)
 
 
 @pytest.mark.parametrize(
@@ -274,13 +305,14 @@ def test_all_three_tables_read_the_state_the_same_way(state, lead):
     identitou, ten isty vstup by v dvoch tabulkach znamenal dva rozne
     stavy - a zrusenie by pre neho vynechalo riadok vyprsania."""
     starts_at = _starts(lead)
+    deadline = _deadline(state, starts_at)
 
-    assert cancel_decision(state.value, starts_at, NOW) == cancel_decision(
-        state, starts_at, NOW
-    )
-    assert expiry_decision(state.value, starts_at, NOW) == expiry_decision(
-        state, starts_at, NOW
-    )
+    assert cancel_decision(
+        state.value, starts_at, NOW, decision_deadline=deadline
+    ) == cancel_decision(state, starts_at, NOW, decision_deadline=deadline)
+    assert expiry_decision(
+        state.value, starts_at, NOW, decision_deadline=deadline
+    ) == expiry_decision(state, starts_at, NOW, decision_deadline=deadline)
     assert confirm_decision(
         state.value, starts_at, NOW, requires_approval=False
     ) == confirm_decision(state, starts_at, NOW, requires_approval=False)
@@ -303,8 +335,8 @@ LEAD_TIME = rules.CANCELLATION_LEAD_TIME
         # certification_covers(valid_until, starts_at)
         (rules.certification_covers, (NOW, NOW), False, "BR-04: valid_until == starts_at"),
         (rules.certification_covers, (NOW + TICK, NOW), True, "BR-04: o tik dlhsie plati"),
-        # approval_request_is_alive(starts_at, now)
-        (rules.approval_request_is_alive, (NOW, NOW), False, "BR-08: v okamihu starts_at"),
+        # approval_request_is_alive(decision_deadline, now) - v0.4
+        (rules.approval_request_is_alive, (NOW, NOW), False, "BR-08: v okamihu terminu rozhodnutia"),
         (rules.approval_request_is_alive, (NOW + TICK, NOW), True, "BR-08: tik pred nim"),
         # may_cancel_confirmed(starts_at, now)
         (rules.may_cancel_confirmed, (NOW + LEAD_TIME, NOW), False, "BR-03: presne 60:00"),
@@ -315,3 +347,114 @@ def test_rule_boundaries_are_strict(predicate, args, expected, case):
     """Vsetky styri hranice su ostre a polootvorene rovnakym smerom - aby
     v systeme nezili dva vyznamy slova 'do' (BR-04)."""
     assert predicate(*args) is expected, case
+
+
+# =========================================================================
+# BR-08 v0.4 - lehota na rozhodnutie o ziadosti (CR-08)
+#
+# Ocakavania su zo specifikacie v0.4 a z AC v CR-08, zapisane PRED kodom.
+# =========================================================================
+
+#: Ziadost so zaciatkom daleko za lehotou - hranicou je teda termin
+#: rozhodnutia, nie starts_at.
+FAR = 5 * 24 * HOUR
+
+
+def test_decision_period_is_48_hours():
+    """BR-08 v0.4: T = 48 kalendarnych hodin (CA-1), pevna hodnota (CA-5)."""
+    assert rules.DECISION_PERIOD == timedelta(hours=48)
+
+
+@pytest.mark.parametrize(
+    ("starts_in", "expected_from_now", "case"),
+    [
+        (FAR, 48 * HOUR, "starts_at daleko - termin je podanie + 48 h"),
+        (24 * HOUR, 24 * HOUR, "AC-05: starts_at skor nez lehota - termin je starts_at"),
+        (48 * HOUR, 48 * HOUR, "starts_at presne v podanie + 48 h - oboje to iste"),
+        (48 * HOUR + TICK, 48 * HOUR, "o tik neskor - uz rozhoduje lehota"),
+    ],
+)
+def test_decision_deadline_is_the_earlier_of_period_and_start(
+    starts_in, expected_from_now, case
+):
+    """DD-8: termin rozhodnutia = min(podanie + T, starts_at)."""
+    assert rules.decision_deadline(NOW, NOW + starts_in) == NOW + expected_from_now, case
+
+
+@pytest.mark.parametrize(
+    ("deadline_in", "expires", "case"),
+    [
+        (TICK, False, "AC-04: podanie + 47:59:59.999999 - zije"),
+        (ZERO, True, "AC-04: presne v termine - vyprsala"),
+        (-TICK, True, "AC-02: po termine"),
+    ],
+)
+def test_expiry_decision_at_the_48h_boundary(deadline_in, expires, case):
+    """AC-04: hranica je termin rozhodnutia, nie starts_at - zaciatok je
+    este o niekolko dni a ziadost aj tak vyprsi."""
+    decision = expiry_decision(
+        S.PENDING_APPROVAL, NOW + FAR, NOW, decision_deadline=NOW + deadline_in
+    )
+
+    expected = (S.EXPIRED, ErrorCode.EXPIRED) if expires else (None, None)
+    assert (decision.target, decision.rejection) == expected, case
+
+
+@pytest.mark.parametrize(
+    ("deadline_in", "target", "rejection"),
+    [
+        (TICK, S.CANCELLED, None),
+        (ZERO, S.EXPIRED, ErrorCode.EXPIRED),
+    ],
+)
+def test_cancel_decision_at_the_48h_boundary(deadline_in, target, rejection):
+    """REQ-14 v0.4: zrusenie tik pred terminom prejde, v termine zapise
+    EXPIRED a zamietne - aj ked do zaciatku zostavaju dni."""
+    decision = cancel_decision(
+        S.PENDING_APPROVAL, NOW + FAR, NOW, decision_deadline=NOW + deadline_in
+    )
+
+    assert (decision.target, decision.rejection) == (target, rejection)
+
+
+@pytest.mark.parametrize("policy", ["cancel", "expiry"])
+def test_a_pending_request_without_deadline_is_a_program_error(policy):
+    """DD-9 a CA-6: ziadost bez terminu rozhodnutia v databaze existovat
+    nema. Politika nesmie potichu predpokladat nejaky termin - v SQL by taka
+    ziadost bola neblokujuca a v politike ziva."""
+    function = {"cancel": cancel_decision, "expiry": expiry_decision}[policy]
+
+    with pytest.raises(ValueError):
+        function(S.PENDING_APPROVAL, NOW + FAR, NOW, decision_deadline=None)
+
+
+@pytest.mark.parametrize("state", [s for s in S if s is not S.PENDING_APPROVAL])
+@pytest.mark.parametrize("lead", [HOUR + TICK, -HOUR])
+def test_the_deadline_is_read_only_for_a_pending_request(state, lead):
+    """Mimo PENDING_APPROVAL termin politika necita - schvalena alebo
+    zrusena rezervacia si ho nesie iba ako zaznam (DD-9)."""
+    starts_at = _starts(lead)
+    for policy in (cancel_decision, expiry_decision):
+        decisions = {
+            policy(state, starts_at, NOW, decision_deadline=deadline)
+            for deadline in (None, NOW - HOUR, NOW + HOUR)
+        }
+        assert len(decisions) == 1, (policy.__name__, state, decisions)
+
+
+@pytest.mark.parametrize(
+    ("deadline_in", "starts_in", "word"),
+    [
+        (ZERO, FAR, "lehot"),
+        (ZERO, ZERO, "zacal"),
+    ],
+)
+def test_expiry_reason_names_the_actual_cause(deadline_in, starts_in, word):
+    """Dovod zamietnutia, ktory dostane klient, nesmie klamat: pri vyprsani
+    lehoty termin rezervacie este nezacal (matica dopadu C08, texty
+    zamietnuti)."""
+    decision = expiry_decision(
+        S.PENDING_APPROVAL, NOW + starts_in, NOW, decision_deadline=NOW + deadline_in
+    )
+
+    assert word in decision.reason, decision.reason

@@ -755,3 +755,331 @@ def test_decide_unknown_reservation_is_rejected(session, supervisor, now):
         )
 
     assert excinfo.value.code is ErrorCode.NOT_FOUND
+
+
+# =========================================================================
+# BR-08 v0.4 - lehota na rozhodnutie o ziadosti (CR-08)
+#
+# Priklady overenia zo specifikacie v0.4 a AC-01..AC-10 z CR-08. Ocakavania
+# su zapisane PRED kodom. Ziadost sa podava skutocnym OP-03 v case P, aby
+# termin rozhodnutia vznikol tak, ako vznika v systeme - nie zapisom
+# do databazy.
+# =========================================================================
+
+DAY = timedelta(days=1)
+FAR = 5 * DAY
+
+
+def _persisted(new_session, reservation_id):
+    """(stav, termin rozhodnutia), ako ich vidi INE spojenie."""
+    from swilab.models import Reservation
+
+    with new_session() as other:
+        reservation = other.get(Reservation, reservation_id)
+        return reservation.state, reservation.decision_deadline
+
+
+def _outcome(operation):
+    try:
+        operation()
+    except DomainError as exc:
+        return exc.code
+    return None
+
+
+@pytest.fixture
+def submit(session, make_user, make_certification, make_reservation, guarded_instrument):
+    """Ziadost podana v case P skutocnym potvrdenim (OP-03)."""
+
+    def _submit(P, starts_in=FAR, instrument=None):
+        instrument = instrument or guarded_instrument
+        owner = make_user()
+        starts_at = P + starts_in
+        make_certification(owner, instrument.category, starts_at + 30 * DAY)
+        draft = make_reservation(instrument, owner, starts_at, starts_at + HOUR)
+        service.confirm_reservation(
+            session, reservation_id=draft.id, requested_by=owner.id, now=P
+        )
+        return draft
+
+    return _submit
+
+
+@pytest.mark.parametrize(
+    ("after", "rejection", "state"),
+    [
+        (48 * HOUR - SECOND, None, ReservationState.CONFIRMED),
+        (48 * HOUR, ErrorCode.EXPIRED, ReservationState.EXPIRED),
+    ],
+    ids=["AC-01-47:59:59", "AC-02-48:00:00"],
+)
+def test_approval_at_the_48h_boundary(
+    session, new_session, submit, supervisor, now, after, rejection, state
+):
+    """AC-01, AC-02, AC-04: schvalenie pred terminom prejde, v termine je
+    zamietnute EXPIRED a stav sa zapise - hoci do zaciatku zostavaju dni."""
+    request = submit(now)
+
+    outcome = _outcome(
+        lambda: service.decide_reservation(
+            session, reservation_id=request.id, requested_by=supervisor.id,
+            approve=True, now=now + after,
+        )
+    )
+
+    assert outcome is rejection
+    assert _persisted(new_session, request.id)[0] is state
+
+
+def test_late_rejection_expires_and_a_repeat_is_invalid_state(
+    session, new_session, submit, supervisor, now
+):
+    """AC-02: prvy pokus po termine zapise EXPIRED a zamietne s EXPIRED,
+    dalsi nad uz zapisanym EXPIRED dostane INVALID_STATE."""
+    request = submit(now)
+
+    def reject():
+        service.decide_reservation(
+            session, reservation_id=request.id, requested_by=supervisor.id,
+            approve=False, now=now + 48 * HOUR + SECOND,
+        )
+
+    assert _outcome(reject) is ErrorCode.EXPIRED
+    assert _persisted(new_session, request.id)[0] is ReservationState.EXPIRED
+    assert _outcome(reject) is ErrorCode.INVALID_STATE
+
+
+@pytest.mark.parametrize(
+    ("after", "rejection", "state"),
+    [
+        (48 * HOUR - SECOND, None, ReservationState.CANCELLED),
+        (48 * HOUR, ErrorCode.EXPIRED, ReservationState.EXPIRED),
+    ],
+)
+def test_cancel_at_the_48h_boundary(
+    session, new_session, submit, now, after, rejection, state
+):
+    """REQ-14 v0.4: zrusenie ziadosti sa riadi terminom rozhodnutia."""
+    request = submit(now)
+
+    outcome = _outcome(
+        lambda: service.cancel_reservation(
+            session, reservation_id=request.id, requested_by=request.user_id,
+            now=now + after,
+        )
+    )
+
+    assert outcome is rejection
+    assert _persisted(new_session, request.id)[0] is state
+
+
+def test_request_past_its_deadline_frees_the_instrument(
+    session, new_session, submit, make_user, make_certification, make_reservation,
+    guarded_instrument, now,
+):
+    """AC-03: po termine ziadost neblokuje - OP-02 vrati AVAILABLE
+    a prekryvajuca sa rezervacia sa da potvrdit, hoci zapisany stav
+    ziadosti je stale PENDING_APPROVAL."""
+    request = submit(now)
+    deadline = now + 48 * HOUR
+    span = {"starts_at": request.starts_at, "ends_at": request.ends_at}
+
+    before = service.check_availability(
+        session, instrument_id=guarded_instrument.id, now=deadline - SECOND, **span
+    )
+    after = service.check_availability(
+        session, instrument_id=guarded_instrument.id, now=deadline, **span
+    )
+    assert (before.available, before.reason) == (False, "PENDING_APPROVAL")
+    assert after.available is True
+
+    other = make_user()
+    make_certification(other, guarded_instrument.category, request.starts_at + 30 * DAY)
+    rival = make_reservation(
+        guarded_instrument, other, request.starts_at, request.ends_at
+    )
+    service.confirm_reservation(
+        session, reservation_id=rival.id, requested_by=other.id, now=deadline
+    )
+
+    assert _persisted(new_session, rival.id)[0] is ReservationState.PENDING_APPROVAL
+    assert _persisted(new_session, request.id)[0] is ReservationState.PENDING_APPROVAL
+
+
+@pytest.mark.parametrize(
+    ("before_start", "rejection"),
+    [(SECOND, None), (timedelta(0), ErrorCode.EXPIRED)],
+)
+def test_request_submitted_shortly_before_start_expires_at_start(
+    session, new_session, submit, supervisor, now, before_start, rejection
+):
+    """AC-05: podana 24 h pred zaciatkom - termin rozhodnutia je starts_at."""
+    request = submit(now, starts_in=DAY)
+
+    assert _persisted(new_session, request.id)[1] == request.starts_at
+    outcome = _outcome(
+        lambda: service.decide_reservation(
+            session, reservation_id=request.id, requested_by=supervisor.id,
+            approve=True, now=request.starts_at - before_start,
+        )
+    )
+    assert outcome is rejection
+
+
+@pytest.mark.parametrize("cause", ["lehota", "starts_at"])
+def test_authorization_wins_over_expiry(
+    session, new_session, submit, make_user, now, cause
+):
+    """REQ-15: neopravneny pokus nad vyprsanou ziadostou skonci FORBIDDEN
+    a stav nemeni - pre obe priciny vyprsania. Na baseline to netestovalo
+    nic (nalez analyzy dopadu C08)."""
+    request = submit(now, starts_in=FAR if cause == "lehota" else DAY)
+    late = now + 48 * HOUR if cause == "lehota" else request.starts_at
+    student = make_user()
+
+    outcome = _outcome(
+        lambda: service.decide_reservation(
+            session, reservation_id=request.id, requested_by=student.id,
+            approve=True, now=late,
+        )
+    )
+
+    assert outcome is ErrorCode.FORBIDDEN
+    assert _persisted(new_session, request.id)[0] is ReservationState.PENDING_APPROVAL
+
+
+def test_a_request_from_before_v04_behaves_as_in_v02(
+    session, new_session, guarded_instrument, make_user, make_certification,
+    make_reservation, supervisor, now,
+):
+    """AC-09: ziadost spred zmeny ma termin rozhodnutia = starts_at. Hoci
+    jej DRAFT vznikol pred desiatimi dnami, v0.4 ju spatne nezrusi."""
+    owner = make_user()
+    starts_at = now + FAR
+    make_certification(owner, guarded_instrument.category, starts_at + 30 * DAY)
+    request = make_reservation(
+        guarded_instrument, owner, starts_at, starts_at + HOUR,
+        state=ReservationState.PENDING_APPROVAL, decision_deadline=starts_at,
+    )
+
+    service.decide_reservation(
+        session, reservation_id=request.id, requested_by=supervisor.id,
+        approve=True, now=now,
+    )
+
+    assert _persisted(new_session, request.id)[0] is ReservationState.CONFIRMED
+
+
+def test_approval_with_an_older_now_meets_a_newer_request(
+    session, new_session, submit, make_user, make_certification, make_reservation,
+    guarded_instrument, supervisor, now,
+):
+    """R-06, AC-07: subeh schvalenia s potvrdenim pri hranici lehoty. Ziadost A
+    ma termin D. Potvrdenie prekryvajucej sa B prijate v D (A uz neblokuje)
+    prebehne prve; schvalenie A prijate o sekundu skor - so starsim now, pre
+    ktore je A este ziva - pride na rad potom. BR-02 musi drzat: B je
+    commitnuta a blokuje aj pri starsom now, takze schvalenie A skonci
+    OVERLAP. Poradie sa urci priamo, bez bariery."""
+    request_a = submit(now)
+    deadline = now + 48 * HOUR
+    other = make_user()
+    make_certification(other, guarded_instrument.category, request_a.starts_at + 30 * DAY)
+    rival_b = make_reservation(
+        guarded_instrument, other, request_a.starts_at, request_a.ends_at
+    )
+
+    service.confirm_reservation(
+        session, reservation_id=rival_b.id, requested_by=other.id, now=deadline
+    )
+    outcome = _outcome(
+        lambda: service.decide_reservation(
+            session, reservation_id=request_a.id, requested_by=supervisor.id,
+            approve=True, now=deadline - SECOND,
+        )
+    )
+
+    assert outcome is ErrorCode.OVERLAP
+    assert _persisted(new_session, request_a.id)[0] is ReservationState.PENDING_APPROVAL
+    assert _persisted(new_session, rival_b.id)[0] is ReservationState.PENDING_APPROVAL
+
+
+# --- cez HTTP: AC-06 a kontrakt odpovede -----------------------------------
+
+
+def test_http_confirm_of_a_request_returns_its_decision_deadline(
+    client, make_instrument, make_user, make_certification, make_reservation
+):
+    """AC-06: odpoved potvrdenia, ktore vytvori ziadost, uvadza termin
+    rozhodnutia = podanie + 48 h (starts_at je dalej). Hodiny API su
+    skutocne, preto sa termin overuje voci oknu okolo poziadavky."""
+    instrument = make_instrument(requires_approval=True)
+    owner = make_user()
+    starts_at = (datetime.now(UTC) + FAR).replace(microsecond=0)
+    make_certification(owner, instrument.category, starts_at + 30 * DAY)
+    reservation = make_reservation(instrument, owner, starts_at, starts_at + HOUR)
+
+    sent = datetime.now(UTC)
+    response = client.post(
+        f"/reservations/{reservation.id}/confirm", json={"requested_by": str(owner.id)}
+    )
+    received = datetime.now(UTC)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == ReservationState.PENDING_APPROVAL.value
+    deadline = datetime.fromisoformat(body["decision_deadline"])
+    assert sent + 48 * HOUR <= deadline <= received + 48 * HOUR
+
+
+def test_http_reservation_that_never_was_a_request_has_no_deadline(
+    client, make_instrument, make_user, make_certification
+):
+    """REQ-10 v0.4: pri CONFIRMED termin neexistuje - pole je null,
+    a to uz od vytvorenia (aditivne pole, klienti sa nerozbiju)."""
+    instrument = make_instrument(requires_approval=False)
+    owner = make_user()
+    starts_at = (datetime.now(UTC) + FAR).replace(microsecond=0)
+    make_certification(owner, instrument.category, starts_at + 30 * DAY)
+
+    created = client.post(
+        "/reservations",
+        json={
+            "instrument_id": str(instrument.id), "user_id": str(owner.id),
+            "starts_at": starts_at.isoformat(),
+            "ends_at": (starts_at + HOUR).isoformat(),
+        },
+    )
+    confirmed = client.post(
+        f"/reservations/{created.json()['id']}/confirm",
+        json={"requested_by": str(owner.id)},
+    )
+
+    assert created.json()["decision_deadline"] is None
+    assert confirmed.json()["state"] == ReservationState.CONFIRMED.value
+    assert confirmed.json()["decision_deadline"] is None
+
+
+def test_http_approval_after_the_deadline_is_409_expired(
+    client, new_session, make_instrument, make_user, make_certification,
+    make_reservation,
+):
+    """REQ-15 cez HTTP: hodiny API sa posunut nedaju, preto sa ziadost
+    vlozi s terminom rozhodnutia v minulosti (limit z evidence C08)."""
+    instrument = make_instrument(requires_approval=True)
+    owner = make_user()
+    boss = make_user(role=UserRole.SUPERVISOR, name="Veduci")
+    now = datetime.now(UTC).replace(microsecond=0)
+    starts_at = now + FAR
+    make_certification(owner, instrument.category, starts_at + 30 * DAY)
+    request = make_reservation(
+        instrument, owner, starts_at, starts_at + HOUR,
+        state=ReservationState.PENDING_APPROVAL, decision_deadline=now - HOUR,
+    )
+
+    response = client.post(
+        f"/reservations/{request.id}/approve", json={"requested_by": str(boss.id)}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == ErrorCode.EXPIRED.value
+    assert _persisted(new_session, request.id)[0] is ReservationState.EXPIRED
