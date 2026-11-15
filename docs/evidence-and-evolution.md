@@ -1361,11 +1361,46 @@ prázdny), nový venv podľa README, `docker compose up -d --wait db`,
   baseline skutočne bežala.
 - `docker-compose.yml` používa obraz `postgres:16`, nie presnú verziu — iný
   stroj môže dostať inú 16.x.
-- Projekt nemá CI. „Zelená baseline" znamená beh na jednom stroji (T. Hrubý),
-  nie automatickú kontrolu pri každom commite.
-- Obnovenie druhým členom tímu **zatiaľ neprebehlo** — je to úloha pre
-  reviewera CR-08 (pozri *Peer reviewer* v `intent-and-change.md`). Do vtedy
-  je doklad fázy 0 iba postup, nie vykonané obnovenie.
+- Projekt nemá CI. „Zelená baseline" znamená beh na dvoch strojoch (tabuľka
+  nižšie), nie automatickú kontrolu pri každom commite.
+
+**Obnovenie baseline druhým členom tímu — vykonané.** Zadanie to žiada ako
+doklad fázy 0 („jiný člen obnoví stejný výchozí stav"). Postup podľa
+[README, časť C08](../README.md#c08--controlled-change) zopakoval
+**T. Krišica 2026-11-15 na vlastnom stroji**, nezávisle od behu T. Hrubého:
+
+| Položka | T. Hrubý (pôvodný beh) | T. Krišica (obnovenie) |
+| ------- | ---------------------- | ---------------------- |
+| Dátum | 2026-11-15 | 2026-11-15, 21:01 UTC |
+| Python | 3.12.11 | 3.12.13 |
+| FastAPI | 0.141.1 | 0.142.2 |
+| SQLAlchemy | 2.0.52 | **2.1.3** |
+| psycopg | 3.3.5 | 3.3.6 |
+| uvicorn | 0.53.0 | 0.54.0 |
+| PostgreSQL (`postgres:16`) | 16.15 | **16.13** |
+| `pytest -q` | `253 passed` | **`253 passed`** |
+| `mutation_check.py` | 34 mutácií, 0 prežilo | **34 mutácií, 0 prežilo** |
+| `c08_baseline_tc.py` | 3× `PASS`, kód `0` | **3× `PASS`, kód `0`** |
+| Odtlačok schémy | `1f96b2bbf6bf8c47` | **`1f96b2bbf6bf8c47`** |
+
+Obnovenie **posilňuje** doklad fázy 0 nad rámec toho, čo postup sľuboval:
+knižnice sa nezhodujú (SQLAlchemy je o minor verziu vyššia, Postgres je naopak
+o dve patch verzie staršie) a baseline napriek tomu dala tie isté čísla
+**a ten istý odtlačok schémy**. Obmedzenie „bez lock súboru" teda existuje
+ďalej, ale pre túto baseline sa neprejavilo.
+
+Krišica zopakoval aj dve kontroly, že oracle nie je prázdny:
+
+| Kontrolný beh | Výsledok |
+| ------------- | -------- |
+| vložená chyba — `if conflicts:` → `if False:` na riadku 245 (`enter_blocking_state`), kópia `src/` mimo repozitára, port 8001 | `TC-C08-01 PASS`, `TC-C08-02 FAIL`, `TC-C08-03 FAIL`, návratový kód `1`; nezávislý SQL dotaz našiel blokujúcu dvojicu `[(B1, B2)]` |
+| aplikácia nebeží (port 8009) | `BLOCKED - infrastruktura nebezi: [Errno 61] Connection refused`, návratový kód `2` |
+
+Poznámka k postupu, ktorú pôvodný záznam neuvádza: reťazec `    if conflicts:`
+je v `services/reservations.py` **dvakrát** — na riadku 245
+(`enter_blocking_state`, rozhodnutie o BR-02) a na riadku 365
+(`check_availability`, iba hlásenie dostupnosti). Chybu treba vložiť na riadok
+245; náhrada oboch alebo nesprávneho z nich kontrolný beh znehodnotí.
 
 ### Krok 2 — test cases dnešného správania (návrh pred behom)
 

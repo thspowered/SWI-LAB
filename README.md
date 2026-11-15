@@ -259,13 +259,16 @@ behu, verdikt je `BLOCKED` (návratový kód 2), nie `FAIL`.
   vrátane inventára zapisovateľov (worker, import, admin neexistujú; priamy SQL áno)
 - [x] Options Matrix porovnávajúca reálne reakcie — päť variant vrátane
   „bez zmeny kódu" a dôsledku nečinnosti
-- [ ] **peer-reviewed rozhodnutie** — návrh ACCEPT, varianta A; review
-  T. Krišicu **čaká** (CA-1 až CA-7, vrátane prijatia za rolu vedúceho).
-  Review prebieha v [PR #11](https://github.com/thspowered/SWI-LAB/pull/11).
-- [ ] **obnovenie baseline druhým členom** — postup je vyššie; beh zatiaľ
-  prebehol iba na stroji T. Hrubého (úloha pre reviewera)
+- [x] **peer-reviewed rozhodnutie** — ACCEPT, varianta A so zmenou `CA-5`
+  (T je konštanta, nie konfigurácia). Review T. Krišicu vykonané 2026-11-15
+  v [PR #11](https://github.com/thspowered/SWI-LAB/pull/11): `CA-1` až `CA-4`,
+  `CA-6`, `CA-7` potvrdené vrátane prijatia za rolu vedúceho
+- [x] **obnovenie baseline druhým členom** — T. Krišica 2026-11-15 na vlastnom
+  stroji: `253 passed`, 34 mutácií / 0 prežilo, `TC-C08-01..03` 3× `PASS`,
+  zhodný odtlačok schémy; zopakované aj obe kontroly oracle
 - [x] ACCEPT handoff do C09 — ohraničená delta, nový oracle, regresia,
-  riziká `R-06`, `R-07`, stav PLANNED; **platí až po peer review**
+  riziká `R-06`, `R-07`, stav PLANNED; pred kódom v C09 ostávajú dve
+  podmienky ACCEPT: rozhodnutie o migráciách (`R-04`) a schválená v0.3
 - [x] odkazy na existujúce živé dokumenty, evidence a známe obmedzenia —
   CR v `intent-and-change.md`, test cases v `evidence-and-evolution.md`,
   príkazy tu; žiadny nový dokument, pribudol iba skript `scripts/c08_baseline_tc.py`
