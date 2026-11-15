@@ -208,16 +208,22 @@ jednej jednotky. Pred review v tíme prešla vetva tromi nezávislými kontrolam
 Zmena `CR-08` — **lehota na rozhodnutie o žiadosti** (48 h od podania). V C08
 sa kód nemení: vzniká rozhodnutie a plán overenia, implementácia je C09.
 
+*Pozor na dve „C08".* `docs/SWI-LAB_C08_Project_Status.pptx` a register rizík
+označený „C07/C08" patria k Project Status Reportu z predošlého zadania
+(prezentácia 2026-11-02). Táto časť je zadanie C08 **Controlled Change**.
+
 - Change Request, analýza dopadu, varianty, rozhodnutie a odovzdanie do C09:
   [docs/intent-and-change.md, časť C08](docs/intent-and-change.md#c08--controlled-change-cr-08)
 - baseline a test cases s výsledkami:
   [docs/evidence-and-evolution.md, časť C08](docs/evidence-and-evolution.md#c08--controlled-change-baseline-a-overenie-dnešného-správania)
 
 **Východisková baseline:** commit `b0974e7` (`main`), špecifikácia v0.2.
-Obnovenie rovnakého stavu:
+Obnovenie rovnakého stavu — z vetvy C08, lebo na samotnom `b0974e7` ešte nie je
+skript s test cases; kód aplikácie je na vetve rovnaký ako na `b0974e7`:
 
 ```bash
-git checkout b0974e7            # alebo vetva C08 - kód aplikácie je rovnaký
+git checkout feature/c08-controlled-change
+git diff --stat b0974e7 -- src tests pyproject.toml docker-compose.yml   # prázdne
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d --wait db
@@ -234,8 +240,8 @@ PYTHONPATH=src .venv/bin/python -m uvicorn swilab.main:app --port 8000 &
 ```
 
 Skript robí `TRUNCATE` všetkých tabuliek — nespúšťať súčasne s `pytest` ani
-s `mutation_check.py`. Ak aplikácia alebo databáza nebeží, verdikt je
-`BLOCKED` (návratový kód 2), nie `FAIL`.
+s `mutation_check.py`. Ak aplikácia alebo databáza nebeží alebo vypadne počas
+behu, verdikt je `BLOCKED` (návratový kód 2), nie `FAIL`.
 
 ## C08 Definition of Done
 
@@ -254,9 +260,12 @@ s `mutation_check.py`. Ak aplikácia alebo databáza nebeží, verdikt je
 - [x] Options Matrix porovnávajúca reálne reakcie — päť variant vrátane
   „bez zmeny kódu" a dôsledku nečinnosti
 - [ ] **peer-reviewed rozhodnutie** — návrh ACCEPT, varianta A; review
-  T. Krišicu v PR **čaká** (CA-1 až CA-6)
-- [x] explicitný ACCEPT handoff do C09 — ohraničená delta, nový oracle,
-  regresia, riziká `R-06`, `R-07`, stav PLANNED
+  T. Krišicu **čaká** (CA-1 až CA-7, vrátane prijatia za rolu vedúceho).
+  Vetva zatiaľ nie je zverejnená a PR neexistuje.
+- [ ] **obnovenie baseline druhým členom** — postup je vyššie; beh zatiaľ
+  prebehol iba na stroji T. Hrubého (úloha pre reviewera)
+- [x] ACCEPT handoff do C09 — ohraničená delta, nový oracle, regresia,
+  riziká `R-06`, `R-07`, stav PLANNED; **platí až po peer review**
 - [x] odkazy na existujúce živé dokumenty, evidence a známe obmedzenia —
   CR v `intent-and-change.md`, test cases v `evidence-and-evolution.md`,
   príkazy tu; žiadny nový dokument, pribudol iba skript `scripts/c08_baseline_tc.py`

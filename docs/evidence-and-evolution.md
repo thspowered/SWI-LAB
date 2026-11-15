@@ -1129,8 +1129,8 @@ hranice pre F-02 (`test_create_start_boundary`). Počty testov z C05
 
 ## Registr rizík — C07/C08
 
-Päť rizík zo štyroch kategórií; C08 (Controlled Change, CR-08) pridal R-06
-a R-07 v tých istých kategóriách. `L × I`: 1–2 LOW, 3–4 MEDIUM, 6–9 HIGH.
+Sedem rizík zo štyroch kategórií: R-01 až R-05 z C07/C08 (status report),
+R-06 a R-07 pridal C08 (Controlled Change, CR-08). `L × I`: 1–2 LOW, 3–4 MEDIUM, 6–9 HIGH.
 **Actual residual** je `NOT VERIFIED`, kým nie je účinnosť opatrenia doložená —
 plán skóre neznižuje.
 
@@ -1250,15 +1250,19 @@ plán skóre neznižuje.
 ### R-06 — technické: schválenie čakajúce na zámok prejde po lehote *(C08, CR-08)*
 
 - **Kategória:** Technical / Quality
-- **Popis rizika:** `now` sa odčíta pri prijatí požiadavky (BR-03) → schválenie
-  prijaté tesne pred lehotou, ktoré čaká na zámok, sa zapíše až po nej →
-  žiadosť je schválená o dĺžku čakania „po termíne". BR-02 tým ohrozené nie
-  je (rozbor súbehu v CR-08, `intent-and-change.md`).
+- **Popis rizika:** `now` sa odčíta pri prijatí požiadavky (BR-03) → operácia
+  prijatá tesne pred lehotou, ktorá čaká na zámok, sa vykoná až po nej →
+  schválenie, zamietnutie alebo zrušenie prejde o dĺžku čakania „po termíne"
+  a potvrdenie či dopyt na dostupnosť ešte započíta vypršanú žiadosť ako
+  blokujúcu (falošné `OVERLAP` / `UNAVAILABLE`). BR-02 tým ohrozené nie je
+  (rozbor súbehu v CR-08, `intent-and-change.md`).
 - **Počiatočné riziko:** L=1, I=1 → **LOW (1)**. `L=1`: treba súbeh v tej istej
   sekunde ako hranica; `I=1`: posun o čas čakania na zámok, invariant drží.
 - **Stratégia:** ACCEPT — rovnaká sémantika dnes platí pri `starts_at` — a overiť.
-- **Opatrenie / owner / termín:** test súbehu s bariérou pri hranici lehoty
-  v C09. Owner: tím (kto implementuje C09).
+- **Opatrenie / owner / termín:** test na úrovni služby s explicitným `now` —
+  potvrdenie po lehote, potom schválenie so starším `now` → `OVERLAP` — v C09.
+  Dnes tento súbeh nepokrýva žiadny test (C08, *Súbeh*). Owner: tím (kto
+  implementuje C09).
 - **Dôkaz účinnosti:** žiadny — **PLANNED**.
 - **Očakávané reziduálne:** L=1, I=1 → LOW (1).
 - **Skutočné reziduálne:** **NOT VERIFIED.**
@@ -1276,7 +1280,7 @@ plán skóre neznižuje.
   nikdy nedostane rozhodnutie, ale drží prístroj do `starts_at`; CR-08 mení,
   **kedy** prepadne, nie či. Pre ostatných používateľov je to zlepšenie, pre
   žiadateľa kratšia lehota.
-- **Stratégia:** ACCEPT pre C09 so súhlasom stakeholdera (CA-1); MITIGATE
+- **Stratégia:** ACCEPT pre C09 so súhlasom stakeholdera (CA-1, CA-7); MITIGATE
   v CP2 cez TBD-09 alebo TBD-03 (issue I-01).
 - **Opatrenie / owner / termín:** lehota viditeľná v odpovedi potvrdenia
   (AC-06). Owner: tím.
@@ -1313,16 +1317,16 @@ v C09 by sa posunuli a dôkaz by prestal ukazovať na to, čo platilo pred zmeno
 | Položka | Hodnota |
 | ------- | ------- |
 | **Commit** | `b0974e7` — merge PR #9 do `main` (2026-11-08), najnovší stav `main`. Vlastný tag nemá; identifikuje ho hash. Najbližší tag je `c05-detailed-design` (`c7df7a0`). |
-| **Špecifikácia** | baseline v0.2, schválená 2026-10-04 ([§11](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L1145-L1173)). Pravidlo, ktoré CR-08 mení: **BR-08** ([L251–293](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L251-L293)). Pravidlá, ktoré na ňom stoja: definícia alokácie ([L72–100](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L72-L100)), BR-02 ([L126–144](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L126-L144)), REQ-14 ([L656–662](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L656-L662)), REQ-11, REQ-12, REQ-15 ([L773–788](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L773-L788)). |
-| **Stavový pohľad** | statechart v0.2, prechod `PENDING_APPROVAL → EXPIRED` „nastal `starts_at`" ([diagrams.md L76–141](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/diagrams.md#L76-L141)). |
-| **Architektúra** | ADR-01 — jediný vlastník BR-02 ([L538–600](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md#L538-L600)); vlastníctvo prechodu `PENDING_APPROVAL → EXPIRED` v G3 ([L745](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md#L745)); tabuľka `expiry_decision` v C05.8 ([L1451–1461](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md#L1451-L1461)). |
+| **Špecifikácia** | baseline v0.2, schválená 2026-10-04 ([§11](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md?plain=1#L1145-L1173)). Pravidlo, ktoré CR-08 mení: **BR-08** ([L251–293](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md?plain=1#L251-L293)). Pravidlá, ktoré na ňom stoja: definícia alokácie ([L72–100](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md?plain=1#L72-L100)), BR-02 ([L126–144](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md?plain=1#L126-L144)), REQ-14 ([L656–662](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md?plain=1#L656-L662)), REQ-11, REQ-12, REQ-15 ([L773–788](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md?plain=1#L773-L788)). |
+| **Stavový pohľad** | statechart v0.2, prechod `PENDING_APPROVAL → EXPIRED` „nastal `starts_at`" ([diagrams.md L76–141](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/diagrams.md?plain=1#L76-L141)). |
+| **Architektúra** | ADR-01 — jediný vlastník BR-02 ([L538–600](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md?plain=1#L538-L600)); vlastníctvo prechodu `PENDING_APPROVAL → EXPIRED` v G3 ([L745](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md?plain=1#L745)); tabuľka `expiry_decision` v C05.8 ([L1451–1461](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md?plain=1#L1451-L1461)). |
 | **Runtime** | Python 3.12.11 · FastAPI 0.141.1 · SQLAlchemy 2.0.52 · psycopg 3.3.5 · pydantic 2.13.5 · pydantic-settings 2.15.0 · uvicorn 0.53.0 · pytest 9.1.1 · httpx 0.28.1 (`pip list` vo `.venv`). |
 | **Databáza** | PostgreSQL 16.15 z `docker-compose.yml` (obraz `postgres:16`, port 5433). Pásmo session UTC (`create_db_engine()`, F-01), izolácia `READ COMMITTED` (ADR-01). |
 | **Verzia schémy** | Schéma nemá verziu ani migrácie (R-04): vzniká cez `create_all()` z `src/swilab/models.py` pri `b0974e7`. Aby sa dala porovnať na inom stroji, zapisujeme ju vypísanú z databázy — tabuľka nižšie. |
-| **Testovacia konfigurácia** | `DATABASE_URL` z `.env.example` (lokálny kontajner; heslo tu neopakujeme). `pyproject.toml`: `testpaths = ["tests"]`, `pythonpath = ["src"]`. Sada je izolovaná: na začiatku `drop_all` + `create_all`, po každom teste `TRUNCATE` (`tests/conftest.py`). |
+| **Testovacia konfigurácia** | `pytest` berie `DATABASE_URL` z prostredia, inak predvolenú hodnotu v `tests/conftest.py` (L10–12), zhodnú s `.env.example` — lokálny kontajner, heslo tu neopakujeme. `pyproject.toml`: `testpaths = ["tests"]`, `pythonpath = ["src"]`. Sada je izolovaná: na začiatku `drop_all` + `create_all`, po každom teste `TRUNCATE` (`tests/conftest.py`). |
 | **Príprava dát** | Správa prístrojov, používateľov a certifikátov nie je v rozsahu v0.2 (TBD-02) — dáta sa zakladajú priamo v databáze. Testy cez fixtures v `conftest.py`, test cases C08 cez `INSERT` s pevnými identifikátormi (časť TC nižšie). |
 | **Príkazy a výsledok** | `.venv/bin/python -m pytest -q` → **`253 passed`** · `.venv/bin/python scripts/mutation_check.py` → **34 mutácií, 0 prežilo** · oboje 2026-11-15 na `b0974e7`, rovnaké čísla ako na reporting baseline C07 (`78b0dc4`). |
-| **Tajomstvá** | Záznam neobsahuje žiadne heslo. Jediné heslo v repozitári je heslo lokálneho vývojového kontajnera v `docker-compose.yml` a `.env.example` (existovalo pred C08). |
+| **Tajomstvá** | Záznam neobsahuje žiadne heslo. Jediné heslo v repozitári je heslo lokálneho vývojového kontajnera; stojí v `docker-compose.yml`, `.env.example`, `src/swilab/config.py` (L7), `tests/conftest.py` (L11) a `scripts/demo.py` (L26) — všetko existovalo pred C08. `scripts/c08_baseline_tc.py` ho nemá: berie `DATABASE_URL` z prostredia alebo z `.env.example` a vo výpise ho maskuje. |
 
 **Schéma pri `b0974e7`**, vypísaná z `information_schema` a `pg_enum`:
 
@@ -1359,6 +1363,9 @@ prázdny), nový venv podľa README, `docker compose up -d --wait db`,
   stroj môže dostať inú 16.x.
 - Projekt nemá CI. „Zelená baseline" znamená beh na jednom stroji (T. Hrubý),
   nie automatickú kontrolu pri každom commite.
+- Obnovenie druhým členom tímu **zatiaľ neprebehlo** — je to úloha pre
+  reviewera CR-08 (pozri *Peer reviewer* v `intent-and-change.md`). Do vtedy
+  je doklad fázy 0 iba postup, nie vykonané obnovenie.
 
 ### Krok 2 — test cases dnešného správania (návrh pred behom)
 
@@ -1414,14 +1421,16 @@ Expected je prepísané v `scripts/c08_baseline_tc.py`, ktorý test cases vykon�
 
 **Final postcondition / oracle:** v databáze sú dve `CONFIRMED` rezervácie `R1`
 a dotaz na blokujúce prekryvy vráti prázdny výsledok.
-**Čo nie je pokryté:** súbežné schválenie dvoch kolidujúcich žiadostí — to je
-samostatný test súbehu (`test_concurrent_approvals_of_colliding_requests`).
+**Čo nie je pokryté:** súbeh — pozri *Súbeh* nižšie; schválenie proti súbežnému
+potvrdeniu toho istého prístroja netestuje dnes nič.
+**Rozhodnutie:** regresný základ pre C09 (AC-01, AC-07) — po implementácii musí
+dať rovnaký výsledok.
 
 #### C08 / TC-C08-02 — potvrdenie rezervácie prekrývajúcej sa s potvrdenou (negatívny)
 
 | Pole | Obsah |
 | ---- | ----- |
-| **Test basis** | REQ-04 (potvrdenie len bez prekryvu s blokujúcim stavom), BR-02, BR-01 — v0.2 @ `b0974e7`. Kontrakt zamietnutia: kód `OVERLAP`, HTTP `409` (`main.py`, `STATUS_BY_CODE`). Pre CR-08 regresný základ AC-07. |
+| **Test basis** | REQ-04 (potvrdenie len bez prekryvu s blokujúcim stavom), BR-02, BR-01 — v0.2 @ `b0974e7`. Kontrakt zamietnutia: kód `OVERLAP`, HTTP `409` (`main.py`, `STATUS_BY_CODE`). Riziko: N/A. Pre CR-08 regresný základ AC-07. |
 | **Preconditions + roly** | `B1` = `CONFIRMED`, `R1`, `[D 10:00, D 11:00)`, vlastník `S2`. `B2` = **`DRAFT`**, `R1`, `[D 10:30, D 11:30)`, vlastník `S1` s platným certifikátom. Potvrdzuje vlastník `S1` (BR-06). |
 | **Prečo `B2` je `DRAFT`, nie `PENDING_APPROVAL`** | Živá žiadosť prekrývajúca sa s `CONFIRMED` je v v0.2 stav, ktorý BR-02 zakazuje — legálne do nej nevedie žiadna operácia. Jediná skutočná cesta, ako sa `B2` dostane k rozhodnutiu o BR-02, je potvrdenie z `DRAFT`. Keby sme `B2` vložili ako žiadosť, testovali by sme poškodené dáta, nie kontrakt. |
 | **Test data** | Prekryv `[10:30, 11:00)` — čiastočný, nie dotyk. Prístroj vyžaduje schválenie: bez prekryvu by potvrdenie viedlo do `PENDING_APPROVAL`, takže test pokrýva aj cestu k žiadosti. |
@@ -1437,12 +1446,14 @@ samostatný test súbehu (`test_concurrent_approvals_of_colliding_requests`).
 **Final postcondition / oracle:** riadok `B1` je bajtovo rovnaký ako pred
 operáciou, `B2` je `DRAFT`, dotaz na blokujúce prekryvy je prázdny.
 **Čo nie je pokryté:** dve súbežné potvrdenia — `test_concurrent_conflicting_confirmations`.
+**Rozhodnutie:** regresný základ pre C09 (AC-07) — po implementácii musí dať
+rovnaký výsledok.
 
 #### C08 / TC-C08-03 — zabudnutá žiadosť blokuje prístroj až do začiatku (charakterizácia)
 
 | Pole | Obsah |
 | ---- | ----- |
-| **Test basis** | BR-08 (žiadosť je živá, kým `currentTime < starts_at`), REQ-03 a REQ-13 (živá žiadosť blokuje, dôvod `PENDING_APPROVAL`), REQ-04 (potvrdenie prekrývajúcej sa rezervácie je zamietnuté), REQ-11 (schválenie živej žiadosti) — v0.2 @ `b0974e7`. Je to **old accepted behavior**, ktoré CR-08 mení. |
+| **Test basis** | BR-08 (žiadosť je živá, kým `currentTime < starts_at`), REQ-03 a REQ-13 (živá žiadosť blokuje, dôvod `PENDING_APPROVAL`), REQ-04 (potvrdenie prekrývajúcej sa rezervácie je zamietnuté), REQ-11 (schválenie živej žiadosti) — v0.2 @ `b0974e7`. Je to **old accepted behavior**, ktoré CR-08 mení. Riziko: N/A (obmedzenie, nie riziko — je predmetom CR-08). |
 | **Preconditions + roly** | `B1` = `PENDING_APPROVAL`, `R1`, `[D 10:00, D 11:00)`, vlastník `S1`; jej `DRAFT` vznikol pred 10 dňami (`created_at = beh − 10 dní`). `B2` = `DRAFT`, `R1`, `[D 10:00, D 11:00)`, vlastník `S2`. Schvaľuje `V1`. |
 | **Test data** | Kedy bola `B1` podaná ako žiadosť, sa nastaviť nedá — systém ten okamih neukladá. `created_at` je najbližší údaj, aký baseline má. |
 
@@ -1458,11 +1469,15 @@ operáciou, `B2` je `DRAFT`, dotaz na blokujúce prekryvy je prázdny.
 
 **Final postcondition / oracle:** `B1` `CONFIRMED`, `B2` `DRAFT`.
 **Čo test znamená:** `PASS` tu **nie je** dobrá správa o systéme — potvrdzuje,
-že obmedzenie z CR-08 skutočne existuje. Po implementácii CR-08 (C09) sa
-Expected krokov 2–5 mení: okamih podania bude uložený, žiadosť podaná pred
-viac než 48 h nebude blokovať (`AVAILABLE`), `B2` prejde do
-`PENDING_APPROVAL` a schválenie `B1` skončí `409 EXPIRED`. Test sa tak stane
-oracle novej požiadavky.
+že obmedzenie z CR-08 skutočne existuje.
+**Rozhodnutie:** po implementácii CR-08 sa test stane oracle novej požiadavky.
+Nové Expected musí vzniknúť pred behom a zmení sa takmer celé: v kroku 1 sa
+`B1` vloží **s lehotou v minulosti** (podaná pred viac než 48 h) — bez toho by
+ju AC-09 považovalo za žiadosť spred zmeny a ostala by živá; krok 2 nájde
+stĺpec s lehotou; krok 3 → `AVAILABLE`; krok 4 → `B2` prejde do
+`PENDING_APPROVAL`; krok 5 → `409 EXPIRED`; krok 6 → `B1 EXPIRED`,
+`B2 PENDING_APPROVAL`. Nezávislý SQL oracle BR-02 v skripte treba prepísať na
+pravidlo v0.3.
 **Čo nie je pokryté:** hranica 48:00:00 — na baseline neexistuje, overí ju
 až C09 (AC-04).
 
@@ -1470,7 +1485,7 @@ až C09 (AC-04).
 
 | Položka | Hodnota |
 | ------- | ------- |
-| **Kedy a nad čím** | 2026-11-15 10:55:54 UTC, `HEAD` = `f36e126`, kód aplikácie = `b0974e7` (skript to overuje cez `git diff` nad `src`, `pyproject.toml`, `docker-compose.yml`) |
+| **Kedy a nad čím** | 2026-11-15 10:55:54 UTC, `HEAD` = `f36e126`, kód aplikácie = `b0974e7` (skript to vypíše podľa `git diff` nad `src`, `pyproject.toml`, `docker-compose.yml`; beh tým nezastaví — v C09 sa kód zmení zámerne) |
 | **Prostredie** | `uvicorn swilab.main:app --port 8000` (PYTHONPATH=src), PostgreSQL 16.15 z `docker-compose.yml`, odtlačok schémy `1f96b2bbf6bf8c47` |
 | **Príkaz** | `.venv/bin/python scripts/c08_baseline_tc.py` → návratový kód `0` |
 | **Deň testu D** | 2026-11-22 (UTC) |
@@ -1497,6 +1512,33 @@ chyba skončila červeno. Rovnaký skript sme preto pustili ešte dvakrát:
 | ------------- | ---------- | -------- |
 | aplikácia s vloženou chybou — v kópii `src/` v `enter_blocking_state()` `if conflicts:` → `if False:` (BR-02 sa nevyhodnocuje), port 8001 | `TC-C08-02` a `TC-C08-03` musia padnúť, `TC-C08-01` nie (susedné intervaly sa neprekrývajú) | `TC-C08-01 PASS`, `TC-C08-02 FAIL`, `TC-C08-03 FAIL`, návratový kód `1`. V `TC-C08-02` vrátilo potvrdenie `200 PENDING_APPROVAL` a **nezávislý SQL dotaz našiel blokujúcu dvojicu `[(B1, B2)]`** — porušenie BR-02 odhalila perzistencia, nie odpoveď API. |
 | aplikácia nebeží (port 8009) | `BLOCKED`, nie `FAIL` ani `PASS` | `BLOCKED - infrastruktura nebezi: [Errno 61] Connection refused`, ďalší krok vypísaný, návratový kód `2` |
+
+Ako sa kontrolné behy spustili a čo vypísali (súhrnné riadky výpisu):
+
+```text
+# 1) vložená chyba: kópia src/ v scratch adresári, jedna náhrada textu
+cp -R src $SCRATCH/mutant/
+#   services/reservations.py, enter_blocking_state():  "    if conflicts:" -> "    if False:"
+PYTHONPATH=$SCRATCH/mutant/src .venv/bin/python -m uvicorn swilab.main:app --port 8001 &
+BASE_URL=http://127.0.0.1:8001 .venv/bin/python scripts/c08_baseline_tc.py ; echo $?
+  [FAIL] krok 3: POST confirm(B2), potvrdzuje vlastnik S1
+         actual:   200 PENDING_APPROVAL
+  [FAIL] krok 4: precitat ulozeny stav po rollbacku (nove spojenie)
+         actual:   {'stavy': {'B1': 'CONFIRMED', 'B2': 'PENDING_APPROVAL'}, 'B1_bez_zmeny': True, 'blokujuce_prekryvy': [('B1', 'B2')]}
+  TC-C08-01: PASS
+  TC-C08-02: FAIL
+  TC-C08-03: FAIL
+  1
+
+# 2) aplikácia nebeží
+BASE_URL=http://127.0.0.1:8009 .venv/bin/python scripts/c08_baseline_tc.py ; echo $?
+  BLOCKED - infrastruktura nebezi: [Errno 61] Connection refused
+  dalsi krok: docker compose up -d --wait db; spustit uvicorn (docstring)
+  2
+```
+
+Oba kontrolné behy nezávisle zopakovala aj kontrola pred review s rovnakým
+výsledkom.
 
 Pri behu s vloženou chybou hlavička hlási `kod aplikacie: = b0974e7`, lebo
 porovnáva repozitár, nie kópiu, ktorú server spustil — kontrolný beh to
@@ -1669,12 +1711,22 @@ neuvádza ako vlastnosť skriptu, iba ako jeho hranicu.
 #### Súbeh
 
 Zadanie žiada pre súbežné potvrdenia samostatný test s dvoma súperiacimi
-operáciami. Ten v projekte existuje od C03 a beží v každej sade
-(`tests/test_concurrency_req05.py`): `test_concurrent_conflicting_confirmations`
-(REQ-05, dve potvrdenia), `test_concurrent_approvals_of_colliding_requests`
-(REQ-05, dve schválenia), `test_concurrent_cancel_and_confirm_on_same_reservation`
-a `test_concurrent_approve_and_reject_on_same_request` (REQ-16). Dve
-vlákna, každé s vlastnou session proti Postgresu, štartujú spolu na bariére
-na vstupe do operácie, v ôsmich kolách; test tvrdí aj konkrétne business
-výsledky, nie iba počet blokujúcich rezervácií. Na baseline prechádzajú ako súčasť `253 passed` (krok 0). Pre CR-08 sú
-regresnými testami AC-07.
+operáciami. V projekte existuje od C03 a beží v každej sade
+(`tests/test_concurrency_req05.py`): dve vlákna, každé s vlastnou session proti
+Postgresu, štartujú spolu na bariére na vstupe do operácie, v ôsmich kolách;
+test tvrdí aj konkrétne business výsledky, nie iba počet blokujúcich
+rezervácií. Na baseline prechádzajú ako súčasť `253 passed` (krok 0).
+
+Čo ktorý test naozaj dokazuje — presnejšie, než to uvádzala prvá verzia tohto
+záznamu (opravené po nezávislej kontrole):
+
+| Test | Súbeh | Čo dokazuje |
+| ---- | ----- | ----------- |
+| `test_concurrent_conflicting_confirmations` | dve potvrdenia prekrývajúcich sa `DRAFT` | **skutočný súbeh** REQ-05 — bez zámku prístroja by prešli obe |
+| `test_concurrent_cancel_and_confirm_on_same_reservation`, `test_at_most_one_operation_leaves_the_source_state`, `test_concurrent_approve_and_reject_on_same_request` | dve operácie nad **jednou** rezerváciou | skutočný súbeh REQ-16 (zámok nad riadkom rezervácie) |
+| `test_concurrent_approvals_of_colliding_requests` | dve schválenia | **nie súbeh BR-02.** Začína z dvoch živých prekrývajúcich sa žiadostí vložených priamo — zo stavu, ktorý BR-02 zakazuje (preto ho `TC-C08-02` odmieta testovať). Každé schválenie vidí druhú žiadosť, takže obe skončia `OVERLAP`; podľa vlastného docstringu test kód so zámkom od kódu bez neho nerozlíši. Zámok na ceste schválenia stráži iba statická kontrola (`test_vlastnik_invariantu_si_berie_zamok_sam`). |
+
+**Súbeh schválenia s potvrdením toho istého prístroja netestuje nič** — a práve
+ten je jadrom rizika `R-06` pri CR-08. C09 ho overí testom na úrovni služby
+s explicitným `now` (poradie sa dá určiť priamo, bariéra netreba). Pre CR-08
+sú testy vyššie regresnými testami AC-07.
