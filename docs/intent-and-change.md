@@ -173,7 +173,7 @@ okamih podania žiadosti; lehota viditeľná pre žiadateľa.
 | Čo uvidí žiadateľ? | V odpovedi potvrdenia, ktoré žiadosť vytvorí, okamih, dokedy sa musí rozhodnúť. Po ňom OP-02 vráti `AVAILABLE` a pokus o schválenie, zamietnutie alebo zrušenie skončí zamietnutím `EXPIRED`. | Systém nemá čítaciu operáciu (TBD-09) ani oznámenia (TBD-03). Odpoveď potvrdenia je jediné miesto, kde sa žiadateľ lehotu dozvie. |
 | Čo so žiadosťami podanými pred zmenou? | Platí pre ne doterajšie pravidlo: lehota = ich `starts_at`. | Žiadna žiadosť nesmie prepadnúť spätne podľa pravidla, ktoré pri jej podaní neplatilo — a ich okamih podania systém ani nepozná. Dnes také riadky trvalo neexistujú (kontajner bez volume, R-04); pravidlo platí pre každé ďalšie nasadenie s dátami. |
 | Opakovaný pokus? | Prvý pokus po lehote zapíše `EXPIRED` a vráti zamietnutie `EXPIRED`; každý ďalší dostane `INVALID_STATE`. | Je to dnešné správanie OP-04 a OP-05 pre už zapísaný `EXPIRED` — CR ho nemení. |
-| Oneskorený pokus (čakal na zámok)? | Posudzuje sa podľa `now` odčítaného pri prijatí požiadavky. Schválenie prijaté sekundu pred lehotou, ktoré čakalo na zámok, ešte prejde. | Tá istá sémantika ako dnes pri `starts_at` (BR-03: čas sa odčíta raz). BR-02 tým ohrozené nie je — rozbor v analýze dopadu. Zostáva ako riziko `RISK-C08-1`. |
+| Oneskorený pokus (čakal na zámok)? | Posudzuje sa podľa `now` odčítaného pri prijatí požiadavky. Schválenie prijaté sekundu pred lehotou, ktoré čakalo na zámok, ešte prejde. | Tá istá sémantika ako dnes pri `starts_at` (BR-03: čas sa odčíta raz). BR-02 tým ohrozené nie je — rozbor v analýze dopadu. Zostáva ako riziko `R-06` (register rizík v evidence). |
 
 ### Acceptance conditions
 
@@ -376,5 +376,90 @@ rezervácie `B` sekundu po nej (`now₂`).
 BR-02 teda platí v oboch poradiach — `READ COMMITTED` a zámok prístroja
 (ADR-01) to zaručujú bez ohľadu na to, ktoré `now` operácia nesie. Jediný
 dôsledok zastaraného `now` je sémantický: schválenie, ktoré dorazilo pred
-lehotou a čakalo na zámok, ešte prejde. To je **RISK-C08-1** — zatiaľ
+lehotou a čakalo na zámok, ešte prejde. To je riziko **R-06** — zatiaľ
 **NOT VERIFIED**; overí ho test súbehu s bariérou pri hranici lehoty v C09.
+
+### Alternatives and comparable criteria
+
+Päť reakcií, z toho dve bez nového mechanizmu (C, E) a jedna, ktorá mení
+rozhodnutie z C02 (D). Porovnávame ich tými istými kritériami: splnenie AC,
+rozsah zmeny, dáta a nasadenie, failure modes, reverzibilita a overenie.
+Číselné skóre zámerne nedávame — nemali by sme preň podklad.
+
+| Varianta | Ako rieši potrebu | Splní AC? | Prínos | Náklady, failure modes, rollback | Ako overíme |
+| -------- | ----------------- | --------- | ------ | -------------------------------- | ----------- |
+| **A — lehota vyhodnocovaná pri čítaní** | Okamih podania sa zaznamená pri vstupe do `PENDING_APPROVAL`. Lehotu vyhodnotia obe formy živosti, ktoré už existujú (predikát v politike a SQL v dotaze na prekryv). `EXPIRED` zapíšu OP-04 a OP-05 ako dnes. | **áno**, AC-01 až AC-09 | Ten istý mechanizmus, ktorý v0.2 už prijala pre BR-08 — bez nového procesu a bez nového zapisovateľa, ADR-01 ostáva v platnosti. Malá, ohraničená delta. | Zmena schémy bez migrácií (R-04). V databáze ostáva po lehote zapísané `PENDING_APPROVAL`, kým na žiadosť niekto nesiahne (dnes to isté po `starts_at`, TBD-08). Dve formy živosti sa musia zhodovať — zabudnutá jedna z nich znamená žiadosť, ktorá sa nedá schváliť, a predsa blokuje (alebo naopak). Rollback: vrátiť kód, stĺpec môže ostať; databázové obmedzenie treba odstrániť. | Hranice 47:59:59 / 48:00:00 v politike, v SQL aj cez API; test zhody oboch foriem; `TC-C08-01/02` regresia; `TC-C08-03` s novým Expected; nové mutácie. |
+| **B — plánovač + strážca** | Periodický proces zapisuje `EXPIRED` žiadostiam po lehote. Strážca z A ostáva nutný: medzi lehotou a ďalším behom procesu sa žiadosť nesmie dať schváliť ani blokovať. | **áno**, ale iba **spolu so strážcom** z A. Samotný plánovač AC-02 až AC-04 nesplní — hranica by závisela od periódy behu. | Databáza ukazuje pravdivý stav (rieši TBD-08). Dáva miesto, odkiaľ by sa dalo pri vypršaní oznamovať (TBD-03). | **B obsahuje celé A** a navyše: nový runtime prvok (G4 je dnes jeden proces), výpadok a reštart plánovača, opakovanie, poradie zámkov proti schváleniu, pozorovateľnosť. Druhý zapisovateľ spúšťa „znovu otvoríme, keď…" ADR-01. Rollback: zastaviť proces; zapísané `EXPIRED` ostanú platné. | Všetko z A + test procesu: reštart, oneskorený beh, súbeh zápisu `EXPIRED` so schválením. |
+| **C — lehota pred začiatkom** | Vedúci musí rozhodnúť najneskôr X hodín pred `starts_at`. Netreba nový údaj — `starts_at` v dátach je. | **nie** — žiadosť podaná dva týždne vopred blokuje takmer dva týždne. AC-02 ani AC-04 (lehota od podania) nesplní. | Bez zmeny schémy, najmenšia delta (predikát + SQL). Termín sa uvoľní aspoň X pred začiatkom. | Nerieši jadro potreby — dlhé blokovanie. Zavádza ďalšie číslo X bez zdroja. | Hranica `starts_at − X`. |
+| **D — žiadosť neblokuje** | Vrátiť rozhodnutie C02 R-2: `PENDING_APPROVAL` prestane blokovať, o kolízii rozhodne až schválenie. | **nie** — AC-02 (pozdné schválenie ostáva možné až do `starts_at`), AC-07 (mení prijaté BR-02). | Bez čísla a bez nového údaja; zabudnutá žiadosť neblokuje nikdy. | Vracia problém, ktorý R-2 vyriešil: dve žiadosti na ten istý čas, schválenie zlyhá na poslednú chvíľu. Mení BR-02, REQ-03, REQ-05, REQ-13, rozsah ADR-01 a význam `TC-C08-01/02`. | Veľká regresia celej schvaľovacej časti. |
+| **E — bez zmeny kódu** | Vedúci zabudnuté žiadosti ručne zamieta (REQ-12); obmedzenie sa prizná. | **nie** — AC-02 až AC-04 nič negarantuje. | Žiadna zmena kódu ani dát. | **Dnes ani neuskutočniteľné:** vedúci sa o žiadostiach nedozvie (TBD-03) a nemá ich zoznam (TBD-09) — musel by sa pýtať priamo databázy. | Doložený ručný postup — v súčasnom systéme ho nemáme ako vykonať. |
+
+### Consequence of inaction / feasible compensation
+
+Doložené `TC-C08-03`: žiadosť, o ktorej vedúci nerozhodne, blokuje prístroj až
+do `starts_at` a v tom okamihu termín prepadne pre všetkých — žiadateľa
+aj ostatných. Kompenzácia bez kódu existuje iba na papieri: vedúci môže
+každú žiadosť zamietnuť (REQ-12), ale nemá ako sa o nej dozvedieť (issue I-01).
+Nečinnosť teda nie je neutrálna — ponecháva stratu, ktorú systém podľa
+Project Frame odstraňuje.
+
+### Peer reviewer and challenged assumption
+
+**Peer reviewer: Tomáš Krišica** — review prebehne v pull requeste tejto
+vetvy, rovnako ako pri C03 a C05. **Stav: čaká na review.** Výsledok sem
+zapíše reviewer; kým sa to nestane, rozhodnutie nižšie je **návrh**, nie
+peer-reviewed rozhodnutie.
+
+Predpoklady, ktoré má review výslovne napadnúť:
+
+| # | Predpoklad | Prečo ho treba napadnúť | Výsledok review |
+| - | ---------- | ----------------------- | --------------- |
+| CA-1 | 48 h **kalendárnych** od **podania** | Žiadosť z piatka poobede prepadne v nedeľu. Lehota od podania (nie od vzniku `DRAFT`, nie pred začiatkom) je podstatou CR. | *vyplní reviewer* |
+| CA-2 | Žiadosti spred zmeny majú lehotu = `starts_at` (AC-09) | Alternatíva — počítať lehotu od nasadenia — by uvoľnila staré žiadosti skôr, ale spätne by zmenila pravidlo. | |
+| CA-3 | Schválenie, ktoré dorazilo pred lehotou a čakalo na zámok, ešte prejde (R-06) | Inak by sa čas musel odčítať až pod zámkom — zmena BR-03 („čas sa odčíta raz") pre všetky operácie. | |
+| CA-4 | Varianta A namiesto B: po lehote ostáva v databáze `PENDING_APPROVAL` | Kto číta databázu priamo, vidí nepravdivý stav — dnes rovnako po `starts_at` (TBD-08). | |
+| CA-5 | T konfigurovateľná (predvolená 48 h), nie konštanta | 60-minútová lehota BR-03 je konštanta v kóde. Konfigurácia pridáva config smoke test a riziko zlej jednotky. | |
+| CA-6 | Databázové obmedzenie „žiadosť ⇒ okamih podania" | Chráni priamy SQL zápis, ale komplikuje rollback (riadok *Rollback* v matici). | |
+
+### Decision ACCEPT / REJECT / DEFER / NO_CHANGE, owner, date, rationale
+
+| Položka | Obsah |
+| ------- | ----- |
+| **Rozhodnutie** | **ACCEPT — varianta A** *(návrh; platné po peer review)* |
+| **Owner rozhodnutia** | Tomáš Hrubý |
+| **Dátum návrhu** | 2026-11-15 |
+| **Peer review** | Tomáš Krišica — čaká (vyššie) |
+| **Zdôvodnenie** | A splní všetky AC s najmenšou deltou a tým istým mechanizmom, ktorý baseline v0.2 už prijala pre expiráciu v `starts_at`. Nepridáva zapisovateľa ani proces, takže ADR-01 platí ďalej. B obsahuje celé A — plánovač navyše prináša iba pravdivý stav v databáze (TBD-08), ktorý žiadne AC nežiada, za cenu nového runtime prvku a otvorenia ADR-01. C nerieši jadro potreby, D rozbíja prijaté BR-02 a vracia problém z C02 R-2, E nesplní AC a dnes sa nedá ani vykonať. |
+| **Podmienky ACCEPT** | (1) Peer review potvrdí CA-1 až CA-6 alebo ich zmení — zmena CA-1 alebo CA-2 mení AC a znamená nové review. (2) Stakeholder prijme, že vypršanie sa prejaví pri **ďalšej operácii**, ktorá žiadosť číta (OP-02 až OP-05): hneď po lehote neblokuje a nedá sa schváliť, ale v databáze ostane zapísané `PENDING_APPROVAL`, kým na ňu niekto nesiahne, a nikto nedostane oznámenie. Proaktívne ukončenie žiadosti sa nesľubuje — ten istý kontrakt dnes platí po `starts_at`. (3) Rozhodnutie o migráciách (R-04) padne **pred** kódom v C09. (4) Špecifikácia v0.3 je schválená oboma členmi pred implementáciou. |
+| **Kedy prehodnotiť v prospech B** | Keď tím rozhodne TBD-08 (dočisťovanie v databáze), alebo keď pribudne požiadavka oznámiť vypršanie v okamihu lehoty (TBD-03) — to potrebuje proces spúšťaný časom, nie čítaním. |
+
+### If ACCEPT: bounded C09 delta and new/regression test oracles
+
+| Odovzdanie | Obsah |
+| ---------- | ----- |
+| **Pred zmenou** | Commit `b0974e7`, BR-08 v0.2, `TC-C08-01/02/03` vykonané s výsledkom `PASS` ([evidence, krok 2](evidence-and-evolution.md#krok-2--vykonanie-a-výsledky-actual)), `253 passed`, 34 mutácií / 0 prežilo. |
+| **Prijaté** | CR-08: žiadosť je živá, kým `now < min(podanie + 48 h, starts_at)`; po lehote neblokuje a pokus o rozhodnutie alebo zrušenie ju zapíše ako `EXPIRED` a zamietne. |
+| **Ohraničená delta** — v tomto poradí | 1. **Špecifikácia v0.3 a diagramy** (riadky CHANGE v matici, vrátane nálezu RV-5 v diagrame 3.5) — pred kódom. 2. **Architektúra**: text G3, závislosť pre T v G2, kontrakt C05.4 a tabuľky C05.8. 3. **Testy, ktoré najprv padnú**: hranice predikátu, tabuľky politiky, zhoda oboch foriem živosti pri 48 h, AC-06 v API, config smoke, databázové obmedzenie, riadok spred zmeny; nové Expected `TC-C08-03`. 4. **Kód**: stĺpec a obmedzenie v `models.py`, zápis okamihu podania pri vstupe do `PENDING_APPROVAL`, predikát + politika + SQL, `Settings` + `.env.example`, pole v odpovedi, postup migrácie alebo prestavby databázy. 5. `scripts/mutation_check.py`: upravené texty + nové mutácie. 6. Evidence, README, verzia `0.3.0`. |
+| **Nové test basis / oracle** | podanie + 47:59:59 → schválenie `200 CONFIRMED` · podanie + 48:00:00 → `409 EXPIRED`, uložený stav `EXPIRED` · podanie + 48:00:01 → `409 EXPIRED` · po lehote OP-02 → `AVAILABLE` a potvrdenie prekrývajúcej sa rezervácie prejde · `starts_at` skôr než lehota → vyprší v `starts_at` (AC-05) · odpoveď potvrdenia uvádza lehotu = podanie + T (AC-06) · T = 1 h z konfigurácie → lehota = podanie + 1 h · žiadosť spred zmeny sa správa ako v0.2 (AC-09) · priame vloženie žiadosti bez okamihu podania → odmietne databáza (ak sa obmedzenie prijme, CA-6). |
+| **Regresia** | `TC-C08-01`, `TC-C08-02` s rovnakým výsledkom ako na baseline; celá sada — meniť sa smú iba očakávania riadkov, ktoré matica označuje CHANGE; testy súbehu REQ-05 a REQ-16; oprávnenia BR-06, BR-07; zrušenie `CONFIRMED` (60 min); `scripts/mutation_check.py` bez prežitej mutácie. |
+| **Technické riziko** | `R-06` — schválenie čakajúce na zámok prejde po lehote; owner tím, **NOT VERIFIED**. `R-07` — viac prepadnutých žiadostí, kým vedúci nemá zoznam (I-01). `R-04` — zmena schémy bez migrácií. Register rizík v evidence. |
+| **Práca v C09** | PR so zmenou; integračný beh (`pytest` + `scripts/c08_baseline_tc.py` proti bežiacej aplikácii); čistý checkout na stroji druhého člena; build/CI — projekt CI nemá: buď ho C09 zavedie, alebo zapíše ručný beh druhým členom ako náhradu; rozhodnutie o vydaní (špecifikácia v0.3, verzia `0.3.0`, tag). |
+| **Stav** | Všetko **PLANNED**. Nič nie je IMPLEMENTED ani VERIFIED — preto ani `R-06` nemá overené reziduálne riziko. |
+
+### If NO_CHANGE / REJECT: independent current-baseline check and response
+
+Neuplatňuje sa — rozhodnutie je ACCEPT. Nezávislý doklad dnešnej baseline,
+o ktorý by sa NO_CHANGE musel opierať, aj tak existuje: `TC-C08-01/02`
+(BR-02 drží) a `TC-C08-03` (obmedzenie trvá).
+
+### Open uncertainty / monitoring or next decision trigger
+
+- **Peer review** (CA-1 až CA-6) — kým neprebehne, rozhodnutie je návrh.
+- **Migrácie (R-04)** — podmienka ACCEPT; bez rozhodnutia sa C09 nemá začať kódom.
+- **v0.3 a F-03** — `REQ-16` (R-03) a CR-08 mieria na tú istú verziu
+  špecifikácie; tím rozhodne, či pôjdu spolu.
+- **Stakeholder** — 48 h a kalendárne hodiny sú zapísané tímom za stakeholdera.
+  Ak by skutočný vedúci laboratória povedal iné číslo, mení sa iba hodnota T,
+  nie mechanizmus — preto je T konfigurovateľná.
+- **Trigger na variantu B:** rozhodnutie TBD-08 alebo požiadavka na oznámenie
+  pri vypršaní (TBD-03).

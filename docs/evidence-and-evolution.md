@@ -1129,7 +1129,8 @@ hranice pre F-02 (`test_create_start_boundary`). Počty testov z C05
 
 ## Registr rizík — C07/C08
 
-Päť rizík zo štyroch kategórií. `L × I`: 1–2 LOW, 3–4 MEDIUM, 6–9 HIGH.
+Päť rizík zo štyroch kategórií; C08 (Controlled Change, CR-08) pridal R-06
+a R-07 v tých istých kategóriách. `L × I`: 1–2 LOW, 3–4 MEDIUM, 6–9 HIGH.
 **Actual residual** je `NOT VERIFIED`, kým nie je účinnosť opatrenia doložená —
 plán skóre neznižuje.
 
@@ -1200,6 +1201,8 @@ plán skóre neznižuje.
 - **Skutočné reziduálne:** **NOT VERIFIED.**
 - **Prijatie:** rozhodnutie tímu, nie jednotlivca.
 - **Monitoring / trigger:** akákoľvek ďalšia zmena `REQ-16`, OP-03 alebo OP-04.
+- **Doplnené v C08:** CR-08 mieri na tú istú verziu špecifikácie (v0.3);
+  tím rozhodne, či pôjdu spolu. Stav R-03 sa tým nemení — v0.3 stále neexistuje.
 
 ### R-04 — prevádzka: schéma bez migrácií
 
@@ -1223,6 +1226,10 @@ plán skóre neznižuje.
   pre CP2 **NOT VERIFIED**, migrácie neexistujú.
 - **Prijatie:** Tomáš Hrubý pre CP1.
 - **Monitoring / trigger:** akákoľvek zmena v `models.py`.
+- **Doplnené v C08:** trigger sa spúšťa — CR-08 pridáva do `reservations`
+  údaj o podaní žiadosti. Rozhodnutie o migráciách je preto **podmienkou
+  ACCEPT** a musí padnúť pred kódom v C09. Plán (zapísať do 2026-11-09)
+  v repozitári stále nie je; reziduálne riziko pre CP2 ostáva **NOT VERIFIED**.
 
 ### R-05 — harmonogram: pre CP2 nie je v repozitári zaznamenaný plán
 
@@ -1239,6 +1246,46 @@ plán skóre neznižuje.
 - **Skutočné reziduálne:** **NOT VERIFIED.**
 - **Prijatie:** rozhodnutie tímu.
 - **Monitoring / trigger:** zadanie CP2; akákoľvek zmena rozsahu.
+
+### R-06 — technické: schválenie čakajúce na zámok prejde po lehote *(C08, CR-08)*
+
+- **Kategória:** Technical / Quality
+- **Popis rizika:** `now` sa odčíta pri prijatí požiadavky (BR-03) → schválenie
+  prijaté tesne pred lehotou, ktoré čaká na zámok, sa zapíše až po nej →
+  žiadosť je schválená o dĺžku čakania „po termíne". BR-02 tým ohrozené nie
+  je (rozbor súbehu v CR-08, `intent-and-change.md`).
+- **Počiatočné riziko:** L=1, I=1 → **LOW (1)**. `L=1`: treba súbeh v tej istej
+  sekunde ako hranica; `I=1`: posun o čas čakania na zámok, invariant drží.
+- **Stratégia:** ACCEPT — rovnaká sémantika dnes platí pri `starts_at` — a overiť.
+- **Opatrenie / owner / termín:** test súbehu s bariérou pri hranici lehoty
+  v C09. Owner: tím (kto implementuje C09).
+- **Dôkaz účinnosti:** žiadny — **PLANNED**.
+- **Očakávané reziduálne:** L=1, I=1 → LOW (1).
+- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Prijatie:** návrh T. Hrubý, potvrdzuje peer review CR-08 (CA-3).
+- **Monitoring / trigger:** druhá inštancia aplikácie (každá s vlastnými
+  hodinami); meranie čakania na zámok prístroja (I-02).
+
+### R-07 — prevádzka: prepadnuté žiadosti, kým vedúci nemá zoznam *(C08, CR-08)*
+
+- **Kategória:** Release / Operation
+- **Popis rizika:** po CR-08 žiadosť prepadne 48 h po podaní → vedúci, ktorý sa
+  o žiadosti dozvie neskoro alebo vôbec (I-01: TBD-03, TBD-09), nestihne
+  rozhodnúť → žiadateľ prichádza o žiadosti, ktoré by inak dostal.
+- **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**. Dnes taká žiadosť tiež
+  nikdy nedostane rozhodnutie, ale drží prístroj do `starts_at`; CR-08 mení,
+  **kedy** prepadne, nie či. Pre ostatných používateľov je to zlepšenie, pre
+  žiadateľa kratšia lehota.
+- **Stratégia:** ACCEPT pre C09 so súhlasom stakeholdera (CA-1); MITIGATE
+  v CP2 cez TBD-09 alebo TBD-03 (issue I-01).
+- **Opatrenie / owner / termín:** lehota viditeľná v odpovedi potvrdenia
+  (AC-06). Owner: tím.
+- **Dôkaz účinnosti:** žiadny — **PLANNED**.
+- **Očakávané reziduálne:** L=2, I=1 → LOW (2) po AC-06.
+- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Prijatie:** rozhodnutie tímu v peer review CR-08.
+- **Monitoring / trigger:** podiel žiadostí, ktoré skončia `EXPIRED` bez
+  rozhodnutia; zadanie rozsahu CP2.
 
 ### Otvorené issues (nie riziká — už nastali)
 
