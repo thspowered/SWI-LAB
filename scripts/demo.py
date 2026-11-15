@@ -105,13 +105,17 @@ def seed():
         )
         session.add(locked)
         session.commit()
-        # v0.2: ziadost, ktorej termin uz zacal - na ukazku expiracie
+        # v0.2: ziadost, ktorej termin uz zacal - na ukazku expiracie.
+        # Od v0.4 musi mat termin rozhodnutia (DD-9); ziadost spred v0.4 ho
+        # ma v starts_at (AC-09), takze vyprsala v okamihu zaciatku.
+        expired_start = datetime.now(UTC) - HOUR
         expired_request = Reservation(
             instrument_id=guarded.id,
             user_id=student.id,
-            starts_at=datetime.now(UTC) - HOUR,
+            starts_at=expired_start,
             ends_at=datetime.now(UTC) + HOUR,
             state=ReservationState.PENDING_APPROVAL,
+            decision_deadline=expired_start,
         )
         session.add(expired_request)
         session.commit()

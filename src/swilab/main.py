@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from swilab.api.reservations import router as reservations_router
-from swilab.db import engine
+from swilab.db import engine, ensure_schema
 from swilab.errors import DomainError, ErrorCode
 from swilab.models import Base
 
@@ -34,13 +34,15 @@ STATUS_BY_CODE = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Tabulky vytvarame pri starte, aby bola aplikacia spustitelna jednym
-    # prikazom. Migracie su tema C03 - v C02 by boli predcasnou
-    # architekturou.
+    # prikazom. Migracie projekt nema (ADR-02) a create_all() existujucu
+    # tabulku nezmeni - preto hned potom kontrola, ze schema sedi. Nad starou
+    # schemou aplikacia radsej nenastartuje, nez by kazda poziadavka skoncila 500.
     Base.metadata.create_all(engine)
+    ensure_schema(engine)
     yield
 
 
-app = FastAPI(title="SWI-LAB", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="SWI-LAB", version="0.4.0", lifespan=lifespan)
 
 
 @app.exception_handler(DomainError)
