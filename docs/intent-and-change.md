@@ -256,24 +256,24 @@ Odkazy `L…` sú riadky súborov pri `b0974e7`.
 
 | Artefakt | Dopad a prečo | Rozhodnutie | Nutná akcia | Dôkaz dokončenia |
 | -------- | ------------- | ----------- | ----------- | ---------------- |
-| BR-08 (L251–293) | Pribúda druhá hranica živosti. Rozdelenie *vyhodnotenie* (každá operácia) / *zápis* (iba OP-04, OP-05) zostáva. | **CHANGE** | Nové znenie: živá, kým `now < min(lehota, starts_at)`, lehota = podanie + T určená pri podaní; ostrá hranica; T = 48 h a jej zdroj (CR-08, predpoklad za rolu); pravidlo pre žiadosti spred zmeny (AC-09) a pre zmenu T (AC-10). | Review v0.3; príklady overenia sú test basis AC-02 až AC-05, AC-09, AC-10 |
-| Definícia alokácie (L72–100) | Píše „živá = `currentTime < starts_at`". | **CHANGE** | Odkázať na BR-08 namiesto vzorca, aby vzorec žil na jednom mieste. | Review v0.3 |
-| BR-02 (L126–144) | Odkazuje na „živá podľa BR-08", takže znenie sa nemení samo. Pomenovaný dôsledok (v databáze môže ležať `PENDING_APPROVAL` prekrývajúca sa s `CONFIRMED`) teraz nastane aj pri žiadosti po lehote. | **CHECK** | Overiť, že text platí bez zmeny; dôsledok rozšíriť o lehotu. | Review v0.3 |
-| BR-03, riadok `PENDING_APPROVAL` (L151) a odsek L184–186 | Opakuje vzorec `currentTime < starts_at`. | **CHANGE** | Odkaz na BR-08. | Review v0.3 |
+| BR-08 (L251–293) | Pribúda druhá hranica živosti. Rozdelenie *vyhodnotenie* (každá operácia) / *zápis* (iba OP-04, OP-05) zostáva. | **CHANGE** | Nové znenie: živá, kým `now < min(lehota, starts_at)`, lehota = podanie + T určená pri podaní; ostrá hranica; T = 48 h a jej zdroj (CR-08, predpoklad za rolu); pravidlo pre žiadosti spred zmeny (AC-09) a pre zmenu T (AC-10). | Review v0.4; príklady overenia sú test basis AC-02 až AC-05, AC-09, AC-10 |
+| Definícia alokácie (L72–100) | Píše „živá = `currentTime < starts_at`". | **CHANGE** | Odkázať na BR-08 namiesto vzorca, aby vzorec žil na jednom mieste. | Review v0.4 |
+| BR-02 (L126–144) | Odkazuje na „živá podľa BR-08", takže znenie sa nemení samo. Pomenovaný dôsledok (v databáze môže ležať `PENDING_APPROVAL` prekrývajúca sa s `CONFIRMED`) teraz nastane aj pri žiadosti po lehote. | **CHECK** | Overiť, že text platí bez zmeny; dôsledok rozšíriť o lehotu. | Review v0.4 |
+| BR-03, riadok `PENDING_APPROVAL` (L151) a odsek L184–186 | Opakuje vzorec `currentTime < starts_at`. | **CHANGE** | Odkaz na BR-08. | Review v0.4 |
 | REQ-03, REQ-13 (L385–394) | Odkazujú na BR-08 — znenie platí. | **CHECK** | — | Test OP-02 po lehote |
 | Príklady OP-02 (L457–470), odsek L482–486 | Príklady pozná iba hranicu `starts_at`. | **CHANGE** | Pridať žiadosť po lehote → `AVAILABLE`. | Príklady = test basis |
 | REQ-04 (L502–506) | Odkazuje na živú žiadosť (BR-08). | **CHECK** | — | `TC-C08-03` krok 4 s novým Expected |
 | REQ-10 (L508–511), stav po OP-03 (L534–541) | AC-06: odpoveď pri vzniku žiadosti uvádza lehotu; pri vstupe do `PENDING_APPROVAL` sa zaznamená lehota. | **CHANGE** | Doplniť do REQ-10 a do stavu po úspešnom vykonaní. | Test API (AC-06) |
 | REQ-11, REQ-12 (L773–782) | Odkazujú na „nevypršala (BR-08)" a na „živosť". | **CHECK** | — | Testy OP-05 |
-| REQ-14 (L656–662), REQ-15 (L784–788) | Doslova „ktorej `starts_at` už nastal". | **CHANGE** | „ktorá vypršala (BR-08)". | Review v0.3 + testy |
+| REQ-14 (L656–662), REQ-15 (L784–788) | Doslova „ktorej `starts_at` už nastal". | **CHANGE** | „ktorá vypršala (BR-08)". | Review v0.4 + testy |
 | OP-04 chyby a príklady (L698–701, L740–744); OP-05 predpoklady, chyby, príklady (L790–795, L844, L864–865) | Vzorec so `starts_at`. | **CHANGE** | Prepísať a doplniť príklady 47:59:59 / 48:00:00. | Príklady = test basis |
-| OP-04 predpoklady (L668–670), OP-05 „Zmena stavu" (L816–818) | Opakujú vzorec `currentTime < starts_at` a „pri pokuse o rozhodnutie po `starts_at`". | **CHANGE** | Odkaz na BR-08. | Review v0.3 |
-| §8, záver (L922–925) | Tvrdí, že „expirácia žiadosti (BR-08) zámerne **žiadne nové číslo nezavádza**" — CR-08 ho zavádza. | **CHANGE** | Prepísať: T je predpoklad za rolu vedúceho so zdrojom v CR-08, zapísaný ako konštanta rovnako ako lehota `BR-03`. | Review v0.3 |
-| TBD-07 (L918) | Jediný vedúci: jeho žiadosti prepadnú po 48 h, nie až v `starts_at`. Vedomý dôsledok BR-07 sa zhoršuje. | **CHECK** | Doplniť dôsledok. | Review v0.3 |
-| TBD-08 (L919) | Varianta A dočisťovanie nerieši — ostáva otvorené, ale pribúda dôvod ho rozhodnúť (rollback, riadok *Rollback*). | **CHECK** | Doplniť do TBD-08 odkaz na CR-08 a trigger na variantu B. | Review v0.3 |
-| TBD-03 (L914), TBD-09 (L920) | O vypršaní sa žiadateľ dozvie iba pokusom o operáciu. AC-06 to kompenzuje len čiastočne. | **CHECK** | Pridať „vypršanie" medzi udalosti TBD-03. | Review v0.3 |
+| OP-04 predpoklady (L668–670), OP-05 „Zmena stavu" (L816–818) | Opakujú vzorec `currentTime < starts_at` a „pri pokuse o rozhodnutie po `starts_at`". | **CHANGE** | Odkaz na BR-08. | Review v0.4 |
+| §8, záver (L922–925) | Tvrdí, že „expirácia žiadosti (BR-08) zámerne **žiadne nové číslo nezavádza**" — CR-08 ho zavádza. | **CHANGE** | Prepísať: T je predpoklad za rolu vedúceho so zdrojom v CR-08, zapísaný ako konštanta rovnako ako lehota `BR-03`. | Review v0.4 |
+| TBD-07 (L918) | Jediný vedúci: jeho žiadosti prepadnú po 48 h, nie až v `starts_at`. Vedomý dôsledok BR-07 sa zhoršuje. | **CHECK** | Doplniť dôsledok. | Review v0.4 |
+| TBD-08 (L919) | Varianta A dočisťovanie nerieši — ostáva otvorené, ale pribúda dôvod ho rozhodnúť (rollback, riadok *Rollback*). | **CHECK** | Doplniť do TBD-08 odkaz na CR-08 a trigger na variantu B. | Review v0.4 |
+| TBD-03 (L914), TBD-09 (L920) | O vypršaní sa žiadateľ dozvie iba pokusom o operáciu. AC-06 to kompenzuje len čiastočne. | **CHECK** | Pridať „vypršanie" medzi udalosti TBD-03. | Review v0.4 |
 | §9, §10 (L1014, L1112, L1140–1141), §11 | Zápis „lehotu 48 h sme zamietli" sa reviduje. História ostáva, pribúda nový riadok. | **CHANGE** | Riadok kontroly konzistencie v0.3, riadky REQ-14/REQ-15 v §10, schválenie v0.3 v §11. | Schválená v0.3 |
-| Súbeh s R-03 / F-03 (REQ-16 v0.3) | Obe zmeny cielia na v0.3. | **CHECK** | Tím rozhodne: jedna v0.3 s oboma, alebo v0.3 a v0.4. | Záznam v §11 |
+| Súbeh s R-03 / F-03 (REQ-16) | Obe zmeny cielili na tú istú verziu. | **VYRIEŠENÉ** | Tím ich rozdelil (`ADR-02`): **v0.3 = F-03** (oprava znenia, schválená 2026-11-15), **v0.4 = CR-08**. | Záznam v §11 špecifikácie |
 | `docs/change-impact-c02.md`, R-3 (L22) | Historický záznam rozhodnutia z C02. | **NO IMPACT** | Neprepisuje sa — revíziu zapisuje tento CR. | — |
 
 **Stavový model — `docs/diagrams.md`**
@@ -355,7 +355,7 @@ Odkazy `L…` sú riadky súborov pri `b0974e7`.
 | Artefakt | Dopad a prečo | Rozhodnutie | Nutná akcia | Dôkaz dokončenia |
 | -------- | ------------- | ----------- | ----------- | ---------------- |
 | Verzia (`pyproject.toml` L3, `main.py` L43 — `0.2.0`) | Mení sa správanie API. | **CHANGE** | `0.3.0`. | Release záznam |
-| Baseline špecifikácie | v0.2 → v0.3 so schválením oboch členov. | **CHANGE** | §11. | Schválenie + tag |
+| Baseline špecifikácie | v0.3 → v0.4 so schválením oboch členov. | **CHANGE** | §11. | Schválenie + tag |
 | Rollback | **Pri variante A nie je návrat na v0.2 bezpečný bez prípravy.** Žiadosť po lehote ostáva zapísaná ako `PENDING_APPROVAL`; starý kód ju znova považuje za živú až do `starts_at` — blokuje a dá sa schváliť. Ak medzitým niekto na uvoľnený termín potvrdil rezerváciu, databáza drží živú žiadosť prekrývajúcu sa s `CONFIRMED`, čo je podľa v0.2 porušenie BR-02. Návrat späť má druhú pascu: žiadosti, ktoré podal starý kód, nemajú lehotu (`NULL`). V SQL je `NULL > now` neznáme, teda „neblokuje", kým politika by takú žiadosť mohla brať ako živú — dve formy živosti by sa rozišli a obmedzenie z CA-6 by sa nedalo znova zapnúť. | **CHANGE** | Postup rollbacku: (1) jedným `UPDATE` zapísať `EXPIRED` všetkým žiadostiam s lehotou `<= now()`, (2) odstrániť obmedzenie, (3) nasadiť starý kód. Postup návratu vpred: doplniť lehotu = `starts_at` riadkom s `NULL` (AC-09), až potom zapnúť obmedzenie. Zapísať do release záznamu. | Rollback aj návrat vpred raz vyskúšané nad databázou s dátami |
 | R-04 v registri rizík | Trigger „akákoľvek zmena v `models.py`" sa touto zmenou spúšťa. | **CHECK** | Rozhodnúť o migráciách pred implementáciou v C09. | Rozhodnutie zapísané pri R-04 |
 
@@ -509,13 +509,15 @@ Reviewer zopakoval aj obe kontroly, že oracle nie je prázdny.
 ### If ACCEPT: bounded C09 delta and new/regression test oracles
 
 Peer review prebehlo, podmienky (1) a (2) sú splnené. Pred prvým commitom kódu
-v C09 ostávajú podmienky (3) migrácie a (4) schválená v0.3.
+v C09 ostávala podmienka (3) migrácie — uzavretá rozhodnutím `ADR-02`
+(2026-11-15) — a podmienka (4) schválená špecifikácia, ktorou je pre `CR-08`
+**v0.4**; v0.3 uzavrela samostatný nález F-03.
 
 | Odovzdanie | Obsah |
 | ---------- | ----- |
 | **Pred zmenou** | Commit `b0974e7`, BR-08 v0.2, `TC-C08-01/02/03` vykonané s výsledkom `PASS` ([evidence, krok 2](evidence-and-evolution.md#krok-2--vykonanie-a-výsledky-actual)), `253 passed`, 34 mutácií / 0 prežilo. |
 | **Prijaté** | CR-08: žiadosť je živá, kým `now < min(lehota, starts_at)`, kde lehota = podanie + T (48 h) určená pri podaní; po lehote neblokuje a prvý pokus o rozhodnutie alebo zrušenie ju zapíše ako `EXPIRED` a zamietne. |
-| **Ohraničená delta** — v tomto poradí | 1. **Špecifikácia v0.3 a diagramy** (riadky CHANGE v matici, vrátane nálezu RV-5 v diagrame 3.5) — pred kódom. 2. **Architektúra**: text G3, závislosť pre T v G2, signatúry v H2 a C05.3–C05.8, kontrakt C05.4 a tabuľky C05.8. 3. **Testy, ktoré najprv padnú**: hranice predikátu, tabuľky politiky, zhoda oboch foriem živosti pri lehote, AC-06 na všetkých endpointoch, AC-10, databázové obmedzenie, riadok spred zmeny, `FORBIDDEN` pred `EXPIRED`, súbeh schválenia s potvrdením pri lehote; `swilab.config` do `FORBIDDEN_FOR_POLICY` a lehota do `_mentions_time()`; nové Expected `TC-C08-03` a oracle v0.3 v skripte. 4. **Kód**: stĺpec s lehotou a obmedzenie v `models.py`, zápis lehoty pri vstupe do `PENDING_APPROVAL`, predikát + politika + SQL, texty zamietnutí, konštanta T v `domain/rules.py`, pole v odpovedi, postup migrácie alebo prestavby databázy, postup rollbacku. 5. `scripts/mutation_check.py`: upravené texty + nové mutácie. 6. Evidence, README, verzia `0.3.0`. |
+| **Ohraničená delta** — v tomto poradí | 1. **Špecifikácia v0.4 a diagramy** (riadky CHANGE v matici, vrátane nálezu RV-5 v diagrame 3.5) — pred kódom. 2. **Architektúra**: text G3, závislosť pre T v G2, signatúry v H2 a C05.3–C05.8, kontrakt C05.4 a tabuľky C05.8. 3. **Testy, ktoré najprv padnú**: hranice predikátu, tabuľky politiky, zhoda oboch foriem živosti pri lehote, AC-06 na všetkých endpointoch, AC-10, databázové obmedzenie, riadok spred zmeny, `FORBIDDEN` pred `EXPIRED`, súbeh schválenia s potvrdením pri lehote; `swilab.config` do `FORBIDDEN_FOR_POLICY` a lehota do `_mentions_time()`; nové Expected `TC-C08-03` a oracle v0.3 v skripte. 4. **Kód**: stĺpec s lehotou a obmedzenie v `models.py`, zápis lehoty pri vstupe do `PENDING_APPROVAL`, predikát + politika + SQL, texty zamietnutí, konštanta T v `domain/rules.py`, pole v odpovedi, postup migrácie alebo prestavby databázy, postup rollbacku. 5. `scripts/mutation_check.py`: upravené texty + nové mutácie. 6. Evidence, README, verzia `0.3.0`. |
 | **Nové test basis / oracle** | Každý riadok je **samostatná požiadavka nad čerstvou žiadosťou**, na úrovni služby s explicitným `now`: lehota − 1 s → schválenie `CONFIRMED` · presne lehota → zamietnuté `EXPIRED`, uložený stav `EXPIRED` · lehota + 1 s → `EXPIRED` · druhý pokus nad už zapísaným `EXPIRED` → `INVALID_STATE` · po lehote OP-02 → `AVAILABLE` a potvrdenie prekrývajúcej sa rezervácie prejde · `starts_at` skôr než lehota → vyprší v `starts_at` (AC-05) · odpoveď potvrdenia uvádza lehotu = podanie + T (AC-06) · zmena konštanty T nemení lehotu už podanej žiadosti (AC-10) · žiadosť spred zmeny sa správa ako v0.2 (AC-09) · neoprávnený pokus nad vypršanou žiadosťou → `FORBIDDEN`, stav bez zmeny · priame vloženie žiadosti bez lehoty → odmietne databáza (ak sa obmedzenie prijme, CA-6). Cez HTTP: `409 EXPIRED` pre žiadosť vloženú s lehotou v minulosti (hodiny API sa posunúť nedajú). |
 | **Regresia** | `TC-C08-01`, `TC-C08-02` s rovnakým výsledkom ako na baseline; celá sada — meniť sa smú iba očakávania riadkov, ktoré matica označuje CHANGE; testy súbehu REQ-05 a REQ-16; oprávnenia BR-06, BR-07; zrušenie `CONFIRMED` (60 min); `scripts/mutation_check.py` bez prežitej mutácie. |
 | **Technické riziko** | `R-06` — operácie čakajúce na zámok sa posúdia podľa času príchodu; owner tím, **NOT VERIFIED**. `R-07` — viac prepadnutých žiadostí, kým vedúci nemá zoznam (I-01). `R-04` — zmena schémy bez migrácií. Register rizík v evidence. |
@@ -533,11 +535,12 @@ o ktorý by sa NO_CHANGE musel opierať, aj tak existuje: `TC-C08-01/02`
 - **Peer review** (CA-1 až CA-7) a obnovenie baseline reviewerom —
   **uzavreté 2026-11-15.** Zostáva úloha z nálezu review: doplniť
   `swilab.config` do `FORBIDDEN_FOR_POLICY` — nezávisle od CR-08.
-- **Migrácie (R-04)** — termín 2026-11-09 z C07 uplynul a plán v repozitári
-  nie je. Owner T. Hrubý; nový termín: pred prvým commitom kódu v C09 —
-  je to podmienka ACCEPT.
-- **v0.3 a F-03** — `REQ-16` (R-03) a CR-08 mieria na tú istú verziu
-  špecifikácie; tím rozhodne, či pôjdu spolu.
+- **Migrácie (R-04)** — **uzavreté `ADR-02`** (2026-11-15, o šesť dní po
+  termíne z C07): migrácie sa nezavádzajú, schému stráži kontrola pri štarte,
+  ktorá je súčasťou delty v C09. Spúšťač na prehodnotenie je v `ADR-02`.
+- **v0.3 a F-03** — **uzavreté.** Tím zmeny rozdelil (`ADR-02`): v0.3 opravila
+  `REQ-16` a uzavrela F-03 aj riziko `R-03`; `CR-08` ide do v0.4 ako krok 1
+  delty v C09.
 - **Stakeholder** — 48 h a kalendárne hodiny sú zapísané tímom za stakeholdera.
   Ak by skutočný vedúci laboratória povedal iné číslo, mení sa iba hodnota T,
   nie mechanizmus — hodnota sa zmení jedným riadkom v doméne a novou verziou špecifikácie (CA-5).

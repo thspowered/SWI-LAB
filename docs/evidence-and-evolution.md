@@ -1093,11 +1093,11 @@ Je to jediná hranica v systéme, ktorú nestrážime. Pri `BR-01`, `BR-03`, `BR
 | **Expected** | Jedno konzistentné čítanie naprieč špecifikáciou. |
 | **Observed** | OP-04 pripúšťa, že po víťaznom potvrdení sa zrušenie posúdi podľa nového stavu a ďaleko pred začiatkom **legitímne uspeje**. Obe operácie teda uspejú. |
 | **Verify** | Potvrdené čítaním špecifikácie. Rozpor sme našli sami už v C03 (nález N-07, riziko 6) a zopakovali v C05 (riziko 9); testy pokrývajú **obe** čítania. |
-| **Disposition** | **VERIFIED FINDING · DEFER** — ale s uznaním, že odklad je sám o sebe nález. |
+| **Disposition** | **VERIFIED FINDING · ACCEPT — uzavreté v špecifikácii v0.3 (2026-11-15).** Pôvodne DEFER, s uznaním, že odklad je sám o sebe nález. |
 | **Prečo DEFER** | Je to zmena **špecifikácie**, nie architektúry ani kódu. Správanie systému je definované a otestované; mení sa znenie požiadavky, a to patrí do v0.3 s analýzou dopadu, nie do opravy na poslednú chvíľu pred obhajobou. |
 | **Čo review dodalo** | Upozornenie, ktoré sme si sami nevšimli: špecifikácia je naďalej označená ako **schválená** (§11), tabuľka konzistencie v §9 rozpor neuvádza a README v C02 DoD tvrdí „text, požiadavky a oba pohľady sú vzájomne konzistentné". Dokumenty teda tvrdia konzistenciu, o ktorej vieme, že neplatí. |
 | **Action / owner** | **Návrh tímu: baseline v0.3** — preformulovať `REQ-16` na to, čo OP-04 aj implementácia skutočne garantujú: „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom blokuje prístroj". Kód ani testy sa nemenia — toto čítanie už tvrdí `test_concurrent_cancel_and_confirm_on_same_reservation`. Mení sa znenie požiadavky, preto v0.3 s analýzou dopadu a schválením, nie tichá oprava. Owner: Tomáš Krišica, do 2026-11-09. |
-| **Closure evidence** | **Otvorené.** Medzikrok hotový: §9 špecifikácie, hlavička špecifikácie a C02 DoD v README teraz rozpor uvádzajú, takže dokumenty už netvrdia konzistenciu, ktorá neplatí. Riziko `R-03`. |
+| **Closure evidence** | **Uzavreté.** Špecifikácia **v0.3**: `REQ-16` zúžená na záruku, ktorú `OP-04` a implementácia dávajú; kontrola konzistencie na konci §9 prepísaná z *otvoreného rozporu* na *vyriešený*; §10 a príklad overenia pri OP-03 zosúladené; §11 nesie schválenie v0.3 oboma členmi; C02 DoD v README už výnimku neuvádza. Správanie sa nezmenilo — `253 passed` bez úpravy jediného testu. Riziko `R-03` uzavreté. |
 
 ### Kandidát, ktorý review samo zamietlo
 
@@ -1190,19 +1190,23 @@ plán skóre neznižuje.
 - **Počiatočné riziko:** L=2, I=2 → **MEDIUM (4)**. `L=2`: rozpor prešiel dvoma
   checkpointmi bez dôsledku, ale pri treťom sa naň už pýtali.
 - **Stratégia:** MITIGATE — rozhodnúť, nie ďalej odkladať.
-- **Opatrenie / owner / termín:** tím navrhuje v0.3 — `REQ-16` preformulovať
-  podľa OP-04 (pozri F-03), s analýzou dopadu a schválením. Medzikrok hotový:
-  rozpor je uvedený v §9, v hlavičke špecifikácie aj v C02 DoD v README.
-  Owner: Tomáš Krišica, do 2026-11-09.
-- **Dôkaz účinnosti:** špecifikácia v0.3 s novým znením `REQ-16`, analýza
-  dopadu, aktualizovaná tabuľka konzistencie v §9; `pytest` bez zmeny testov
-  zelený. Stav: **neoverené** — v0.3 zatiaľ neexistuje.
+- **Opatrenie / owner / termín:** **vykonané 2026-11-15** — špecifikácia v0.3
+  zúžila `REQ-16` podľa OP-04 (pozri F-03). Owner: Tomáš Krišica; termín
+  z C07 bol 2026-11-09, prekročený o šesť dní.
+- **Dôkaz účinnosti:** v0.3 s novým znením `REQ-16`; rozbor dopadu v kontrole
+  konzistencie na konci §9; §10, príklad overenia pri OP-03 a C02 DoD v README
+  zosúladené; §11 nesie schválenie oboma členmi. `pytest` **`253 passed` bez
+  úpravy jediného testu** — zmena znenia, nie správania.
+  Stav: **overené**.
 - **Očakávané reziduálne:** L=1, I=2 → LOW (2).
-- **Skutočné reziduálne:** **NOT VERIFIED.**
-- **Prijatie:** rozhodnutie tímu, nie jednotlivca.
+- **Skutočné reziduálne:** **LOW (2) — overené.** Rozpor v schválenej baseline
+  už nie je; zostáva bežné riziko, že budúca zmena `REQ-16`, OP-03 alebo OP-04
+  zavedie nový.
+- **Prijatie:** rozhodnutie tímu — v0.3 schválili obaja členovia (§11).
 - **Monitoring / trigger:** akákoľvek ďalšia zmena `REQ-16`, OP-03 alebo OP-04.
-- **Doplnené v C08:** CR-08 mieri na tú istú verziu špecifikácie (v0.3);
-  tím rozhodne, či pôjdu spolu. Stav R-03 sa tým nemení — v0.3 stále neexistuje.
+- **Doplnené v C08:** `CR-08` mierilo na tú istú verziu špecifikácie. Tím
+  zmeny **rozdelil** (`ADR-02`): v0.3 je oprava `F-03`, `CR-08` ide do v0.4.
+  Oprava chyby tým nečakala na novú požiadavku a `R-03` sa dalo uzavrieť hneď.
 
 ### R-04 — prevádzka: schéma bez migrácií
 

@@ -11,9 +11,11 @@ vyžadujú.
 Vizuálne pohľady na to isté správanie — diagram prípadov užitia, stavový diagram
 a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
 
-**Stav:** baseline v0.2 — schválená tímom 2026-10-04 (časť 11).
-**Známy otvorený rozpor:** `REQ-16` ↔ OP-04 — zistený v C03, potvrdený
-nezávislým review v C06 (nález F-03). Popis a návrh v0.3 sú na konci časti 9.
+**Stav:** baseline v0.3 — schválená tímom 2026-11-15 (časť 11).
+v0.3 je **oprava znenia, nie zmena správania**: zužuje `REQ-16` na to, čo
+`OP-04` a implementácia robia od v0.2. Tým sa uzatvára nález F-03 z C06.
+Nová požiadavka `CR-08` (lehota na rozhodnutie o žiadosti) ide do v0.4 —
+pozri [intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08).
 
 **História verzií**
 
@@ -21,6 +23,7 @@ nezávislým review v C06 (nález F-03). Popis a návrh v0.3 sú na konci časti
 | ------ | ----- |
 | v0.1 | Štyri základné operácie, pravidlá BR-01..BR-06, požiadavky REQ-01..REQ-09. Schválená tímom. |
 | v0.2 | Schvaľovací proces: nová operácia OP-05, stavy `PENDING_APPROVAL`, `REJECTED`, `EXPIRED`, pravidlá BR-07 a BR-08, požiadavky REQ-10..REQ-16. |
+| v0.3 | Oprava `REQ-16`: zúžené na záruku, ktorú `OP-04` a implementácia skutočne dávajú. Žiadna zmena správania, kódu ani testov — nález F-03 z nezávislého review v C06. |
 
 Čo presne zmena zasiahla a čo výslovne nie, je v
 [docs/change-impact-c02.md](change-impact-c02.md). Analýza dopadu vznikla
@@ -516,12 +519,22 @@ Oprávnený používateľ požiada o potvrdenie rezervácie `X`.
 > z nich. Ostatné skončia zamietnutím a zostanú v pôvodnom stave — pri
 > potvrdení `DRAFT`, pri schvaľovaní `PENDING_APPROVAL`.
 
-> **REQ-16** *(nové v v0.2)***:** Rezervácia opustí daný stav **najviac raz**,
-> aj keď o ňu súbežne žiadajú dve rôzne operácie. Ak sa stretne zrušenie
-> s potvrdením alebo so schválením tej istej rezervácie, uspeje najviac jedno
-> z nich; druhé skončí zamietnutím podľa už zmeneného zdrojového stavu.
-> Nikdy nenastane stav, v ktorom by používateľ dostal na zrušenie úspech
-> a rezervácia pritom blokovala prístroj.
+> **REQ-16** *(nové v v0.2, zúžené v v0.3)***:** Rezervácia opustí daný stav
+> **najviac raz**, aj keď o ňu súbežne žiadajú dve rôzne operácie. Ak sa
+> stretne zrušenie s potvrdením alebo so schválením tej istej rezervácie,
+> druhá v poradí sa posúdi podľa **už zmeneného** zdrojového stavu — a buď
+> podľa neho oprávnene uspeje, alebo skončí zamietnutím. Nikdy nenastane
+> stav, v ktorom by používateľ dostal na zrušenie úspech a rezervácia pritom
+> blokovala prístroj.
+
+*Zmena oproti v0.2:* pôvodné znenie dodávalo, že „uspeje najviac jedno
+z nich". To bolo silnejšie, než `OP-04` dovoľuje a než ktorákoľvek
+implementácia spĺňajúca `OP-04` dokáže splniť: keď potvrdenie vyhrá a do
+začiatku zostáva viac než 60 minút (BR-03), následné zrušenie `CONFIRMED`
+rezervácie **oprávnene uspeje** — uspejú teda obe. Záruka, na ktorej
+požiadavke záleží, je tretia veta; prvá a tretia platia aj po zmene.
+Správanie, kód ani testy sa nemenia (`test_concurrent_cancel_and_confirm_on_same_reservation`,
+`test_at_most_one_operation_leaves_the_source_state`).
 
 > **REQ-06:** Rezerváciu, ktorej začiatok už nastal, nemožno potvrdiť.
 
@@ -591,7 +604,9 @@ už CANCELLED                                                   → zamietnuté,
 cudzí študent potvrdzuje cudziu rezerváciu                     → zamietnuté, zostáva DRAFT
 supervisor potvrdzuje cudziu rezerváciu                        → CONFIRMED
 dve súbežné potvrdenia prekrývajúcich sa rezervácií            → najviac jedna v blokujúcom stave (REQ-05)
-súbežné zrušenie a potvrdenie tej istej rezervácie             → uspeje najviac jedno (REQ-16)
+súbežné zrušenie a potvrdenie tej istej rezervácie             → rezervácia opustí DRAFT najviac raz; zrušenie sa posúdi podľa
+                                                                 už zmeneného stavu a nikdy nevráti úspech nad blokujúcou
+                                                                 rezerváciou (REQ-16, v0.3)
 
 --- pridané v v0.2 ---
 
@@ -1067,20 +1082,24 @@ nefiguruje.
 dôkaz (`tests/test_concurrency_req05.py`, xfail). Implementácia ju zatiaľ
 nespĺňa — je to druhý architektonický driver pre C03.
 
-### Známy otvorený rozpor po schválení v0.2 — `REQ-16` ↔ OP-04
+### Kontrola konzistencie po zmene v0.3 — `REQ-16` ↔ OP-04
 
-*Doplnené po C06, nález F-03.* Tabuľky vyššie ho neuvádzajú, lebo sme ho
-našli až v C03.
-`REQ-16` hovorí, že pri súbehu zrušenia s potvrdením „uspeje najviac jedno
-z nich“. OP-04 však pri víťaznom potvrdení posúdi následné zrušenie podľa
-nového stavu — a ďaleko pred začiatkom (viac než 60 min, BR-03) **oprávnene
-uspeje**. Obe operácie teda uspejú a doslovné znenie `REQ-16` nesplní žiadna
-implementácia, ktorá spĺňa OP-04.
-*Stav:* otvorené. Tím navrhuje v0.3: `REQ-16` zúžiť na to, čo platí
-v oboch častiach — „zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom
-blokuje prístroj“. Implementácia aj testy toto čítanie už dodržiavajú
-(`test_concurrent_cancel_and_confirm_on_same_reservation`), takže v0.3 zmení
-znenie, nie správanie. Detail v `docs/evidence-and-evolution.md`, časť C07.
+*Nález F-03 z nezávislého review v C06; rozpor sme našli sami už v C03
+(N-07), preto ho tabuľky vyššie neuvádzajú.* **Vyriešené v v0.3.**
+
+| Položka | Obsah |
+| ------- | ----- |
+| **Rozpor** | `REQ-16` v0.2 tvrdila, že pri súbehu zrušenia s potvrdením „uspeje najviac jedno z nich". OP-04 však pri víťaznom potvrdení posúdi následné zrušenie podľa **nového** stavu — a ďaleko pred začiatkom (viac než 60 min, BR-03) oprávnene uspeje. Obe operácie teda uspejú. |
+| **Ktoré znenie bolo chybné** | `REQ-16`. OP-04 popisuje správanie, ktoré tím prijal a ktoré je správne: zrušiť potvrdenú rezerváciu deň vopred musí ísť bez ohľadu na to, ako sa do stavu `CONFIRMED` dostala. |
+| **Oprava** | Druhá veta `REQ-16` zúžená: druhá operácia v poradí sa posúdi podľa už zmeneného zdrojového stavu a **podľa neho** buď uspeje, alebo je zamietnutá. Prvá veta (stav sa opustí najviac raz) a tretia (zrušenie nikdy nevráti úspech nad blokujúcou rezerváciou) ostávajú doslova. |
+| **Dopad na správanie** | **Žiadny.** Implementácia aj testy toto čítanie dodržiavali od v0.2 — pokrývajú ho `test_concurrent_cancel_and_confirm_on_same_reservation` a `test_at_most_one_operation_leaves_the_source_state`. Sada po zmene: `253 passed`, bez úpravy jediného testu. |
+| **Dopad na ostatné časti** | `REQ-05` sa netýka — hovorí o dvoch rezerváciách jedného prístroja, nie o dvoch operáciách nad jednou rezerváciou. `BR-03` a OP-04 sa nemenia. Príklad overenia pri OP-03 a riadok `REQ-16` v časti 10 prepísané na nové znenie. |
+| **Čo to nerieši** | Nič nové nepribudlo. `REQ-16` naďalej negarantuje poradie dvoch súbežných operácií — to je vlastnosť súbehu, nie medzera v požiadavke. |
+
+**Čo nález odkryl nad rámec samotného rozporu** a čo v0.3 naprával tiež:
+špecifikácia bola po C03 aj C05 naďalej označená ako schválená, kontrola
+konzistencie rozpor neuvádzala a C02 DoD v README tvrdilo úplnú konzistenciu.
+Od C07 to dokumenty priznávali; v0.3 to uzatvára.
 
 ---
 
@@ -1099,7 +1118,7 @@ operácie.
 | REQ-03 | áno — hranice intervalu (dotyk zľava/sprava), množina stavov       | nie — čítacia operácia, ale výsledok môže zastarať hneď po odpovedi¹    | tri hraničné dopyty okolo `CONFIRMED` [10:00,11:00)    |
 | REQ-04 | áno — stav `DRAFT`, `now < starts_at`, platnosť certifikátu        | **áno** — dve potvrdenia môžu súčasne prejsť kontrolou prekryvu         | potvrdenie pri prekryve zamietnuté, stav zostáva `DRAFT` |
 | REQ-05 | áno — týka sa práve okamihu medzi kontrolou prekryvu a zápisom      | **áno, toto je jeho jediný obsah**                                      | dve súbežné potvrdenia aj dve súbežné schválenia → najviac jedna rezervácia v blokujúcom stave |
-| REQ-16 | áno — okamih medzi kontrolou zdrojového stavu a zápisom             | **áno, toto je jeho jediný obsah**                                      | súbežné zrušenie a potvrdenie tej istej rezervácie → uspeje najviac jedno |
+| REQ-16 *(v0.3)* | áno — okamih medzi kontrolou zdrojového stavu a zápisom             | **áno, toto je jeho jediný obsah**                                      | súbežné zrušenie a potvrdenie tej istej rezervácie → zdrojový stav sa opustí najviac raz a zrušenie nikdy nevráti úspech nad rezerváciou, ktorá potom blokuje |
 | REQ-06 | áno — hranica `now < starts_at`                                    | hraničný prípad: potvrdenie v okamihu `starts_at` závisí od jedného odčítania času | potvrdenie po začiatku zamietnuté            |
 | REQ-07 | nie — pre `DRAFT` neplatí žiadna lehota (po N-03)                  | zriedkavo: súbeh s `Confirm` — riešené v OP-04, časť „Súbeh s potvrdením“ | zrušenie `DRAFT` pred aj po začiatku prejde          |
 | REQ-08 | áno — hranica presne 60:00 min                                     | ako REQ-07                                                              | 60:00 zamietnuté, 60:01 prejde                        |
@@ -1170,4 +1189,20 @@ tímu* (R-1 až R-5). `RV-x` v časti 9 tejto špecifikácie sú *rozpory nájde
 nezávislou revíziou* (RV-1 až RV-6). Pôvodne mali obe sady štítok `R-x`,
 čo bol presne ten druh nejednoznačnosti, ktorý revízia hľadá inde.
 
-Ďalšie zmeny sa povedú ako v0.3, opäť s analýzou dopadu pred prepisom.
+**Baseline v0.3 — oprava `REQ-16` (nález F-03)**
+
+| Člen          | Rola pri baseline v0.3                                                | Stav          |
+| ------------- | ----------------------------------------------------------------------- | ------------- |
+| Tomáš Krišica | reprodukcia nálezu, návrh nového znenia, prepis špecifikácie             | ✅ 2026-11-15  |
+| Tomáš Hrubý   | review pred integráciou ([PR #12](https://github.com/thspowered/SWI-LAB/pull/12)) | ✅ 2026-11-15  |
+
+v0.3 je **oprava znenia**: správanie, kód ani testy sa nemenia a sada ostáva
+`253 passed`. Preto k nej nie je samostatná analýza dopadu ako pri v0.2 —
+dopad je rozobratý v kontrole konzistencie na konci časti 9 a vo vyhodnotení
+nálezu F-03 v [docs/evidence-and-evolution.md](evidence-and-evolution.md).
+
+Ďalšou zmenou bude **v0.4** — požiadavka `CR-08` (lehota na rozhodnutie
+o žiadosti). Jej analýza dopadu je hotová a schválená
+([docs/intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08));
+prepis špecifikácie je krok 1 delty v C09, pred kódom. Rozdelenie v0.3 a v0.4
+zdôvodňuje `ADR-02`.
