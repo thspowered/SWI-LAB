@@ -1247,3 +1247,68 @@ plán skóre neznižuje.
 | **I-01** | Schvaľovací tok nie je použiteľný end-to-end: Notification Service nie je napojená (`TBD-03`) a systém nemá žiadnu čítaciu operáciu (`TBD-09`). | Vedúci sa o žiadosti nedozvie a žiadateľ sa nedozvie výsledok. Tok funguje len cez testy a `scripts/demo.py`. | obaja | Rozhodnúť rozsah pre CP2; dovtedy priznávať ako obmedzenie, nie zakrývať. |
 | **I-02** | Serializácia na prístroj (ADR-01) nie je zmeraná. | Future pressure z C01 hovorí o 10× viac súbežných rezervácií; nemáme žiadne číslo. | Tomáš Krišica | Do 2026-11-09 rozhodnúť a zapísať pri ADR-01: buď merateľné kritérium + meranie, alebo tvrdenie o škálovaní stiahnuť. |
 | **I-03** | `F-01` a `F-02` boli doložené nezhody, nie budúce riziká. | Viď vyššie. | Tomáš Hrubý | **Uzavreté** v `8b1083b` a `fe6c298` (closure evidence pri F-01, F-02). |
+
+---
+
+## C08 — Controlled Change: baseline a overenie dnešného správania
+
+Zmena `CR-08` (lehota na rozhodnutie o žiadosti) je opísaná v
+[intent-and-change.md, časť C08](intent-and-change.md#c08--controlled-change-cr-08).
+Tu je to, o čo sa opiera: presná baseline, test cases dnešného správania a ich
+skutočné vykonanie. **V C08 sa kód aplikácie nemení** — vetva
+`feature/c08-controlled-change` mení iba `docs/`, `README.md` a `scripts/`.
+
+Odkazy na riadky vedú na commit `b0974e7`, nie na `main`: po implementácii
+v C09 by sa posunuli a dôkaz by prestal ukazovať na to, čo platilo pred zmenou.
+
+### Krok 0 — východisková baseline (before)
+
+| Položka | Hodnota |
+| ------- | ------- |
+| **Commit** | `b0974e7` — merge PR #9 do `main` (2026-11-08), najnovší stav `main`. Vlastný tag nemá; identifikuje ho hash. Najbližší tag je `c05-detailed-design` (`c7df7a0`). |
+| **Špecifikácia** | baseline v0.2, schválená 2026-10-04 ([§11](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L1145-L1173)). Pravidlo, ktoré CR-08 mení: **BR-08** ([L251–293](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L251-L293)). Pravidlá, ktoré na ňom stoja: definícia alokácie ([L72–100](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L72-L100)), BR-02 ([L126–144](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L126-L144)), REQ-14 ([L656–662](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L656-L662)), REQ-11, REQ-12, REQ-15 ([L773–788](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/specification.md#L773-L788)). |
+| **Stavový pohľad** | statechart v0.2, prechod `PENDING_APPROVAL → EXPIRED` „nastal `starts_at`" ([diagrams.md L76–141](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/diagrams.md#L76-L141)). |
+| **Architektúra** | ADR-01 — jediný vlastník BR-02 ([L538–600](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md#L538-L600)); vlastníctvo prechodu `PENDING_APPROVAL → EXPIRED` v G3 ([L745](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md#L745)); tabuľka `expiry_decision` v C05.8 ([L1451–1461](https://github.com/thspowered/SWI-LAB/blob/b0974e7/docs/architecture-and-decisions.md#L1451-L1461)). |
+| **Runtime** | Python 3.12.11 · FastAPI 0.141.1 · SQLAlchemy 2.0.52 · psycopg 3.3.5 · pydantic 2.13.5 · pydantic-settings 2.15.0 · uvicorn 0.53.0 · pytest 9.1.1 · httpx 0.28.1 (`pip list` vo `.venv`). |
+| **Databáza** | PostgreSQL 16.15 z `docker-compose.yml` (obraz `postgres:16`, port 5433). Pásmo session UTC (`create_db_engine()`, F-01), izolácia `READ COMMITTED` (ADR-01). |
+| **Verzia schémy** | Schéma nemá verziu ani migrácie (R-04): vzniká cez `create_all()` z `src/swilab/models.py` pri `b0974e7`. Aby sa dala porovnať na inom stroji, zapisujeme ju vypísanú z databázy — tabuľka nižšie. |
+| **Testovacia konfigurácia** | `DATABASE_URL` z `.env.example` (lokálny kontajner; heslo tu neopakujeme). `pyproject.toml`: `testpaths = ["tests"]`, `pythonpath = ["src"]`. Sada je izolovaná: na začiatku `drop_all` + `create_all`, po každom teste `TRUNCATE` (`tests/conftest.py`). |
+| **Príprava dát** | Správa prístrojov, používateľov a certifikátov nie je v rozsahu v0.2 (TBD-02) — dáta sa zakladajú priamo v databáze. Testy cez fixtures v `conftest.py`, test cases C08 cez `INSERT` s pevnými identifikátormi (časť TC nižšie). |
+| **Príkazy a výsledok** | `.venv/bin/python -m pytest -q` → **`253 passed`** · `.venv/bin/python scripts/mutation_check.py` → **34 mutácií, 0 prežilo** · oboje 2026-11-15 na `b0974e7`, rovnaké čísla ako na reporting baseline C07 (`78b0dc4`). |
+| **Tajomstvá** | Záznam neobsahuje žiadne heslo. Jediné heslo v repozitári je heslo lokálneho vývojového kontajnera v `docker-compose.yml` a `.env.example` (existovalo pred C08). |
+
+**Schéma pri `b0974e7`**, vypísaná z `information_schema` a `pg_enum`:
+
+| Tabuľka | Stĺpce (všetky `NOT NULL`) | Obmedzenia |
+| ------- | -------------------------- | ---------- |
+| `instruments` | `id uuid`, `name varchar`, `category instrument_category`, `location varchar`, `is_active boolean`, `requires_approval boolean` | PK |
+| `users` | `id uuid`, `full_name varchar`, `email varchar`, `role user_role` | PK, `UNIQUE (email)` |
+| `certifications` | `id uuid`, `user_id uuid`, `category instrument_category`, `valid_until timestamptz` | PK, FK `users` |
+| `reservations` | `id uuid`, `instrument_id uuid`, `user_id uuid`, `starts_at timestamptz`, `ends_at timestamptz`, `state reservation_state`, `created_at timestamptz` | PK, FK `instruments`, FK `users` |
+
+Enum `reservation_state`: `DRAFT, PENDING_APPROVAL, CONFIRMED, CANCELLED,
+REJECTED, EXPIRED`. Žiadny stĺpec nemá predvolenú hodnotu v databáze (predvoľby
+sú iba v Pythone) a schéma nemá žiadny `CHECK` ani obmedzenie pre BR-02 — to je
+prijatý dôsledok č. 1 ADR-01.
+
+**Pozorovanie, ktoré CR-08 priamo zasahuje:** v `reservations` **nie je stĺpec,
+z ktorého by sa dalo zistiť, kedy bola žiadosť podaná.** `created_at` je okamih
+vzniku `DRAFT` (`create_reservation`, [services L319–326](https://github.com/thspowered/SWI-LAB/blob/b0974e7/src/swilab/services/reservations.py#L319-L326));
+prechod `DRAFT → PENDING_APPROVAL` zapíše iba nový stav
+([L251](https://github.com/thspowered/SWI-LAB/blob/b0974e7/src/swilab/services/reservations.py#L251),
+commit na [L435](https://github.com/thspowered/SWI-LAB/blob/b0974e7/src/swilab/services/reservations.py#L435)).
+
+**Ako iný člen tímu obnoví rovnaký stav:** `git checkout b0974e7` (alebo táto
+vetva — `git diff b0974e7 -- src tests pyproject.toml docker-compose.yml` je
+prázdny), nový venv podľa README, `docker compose up -d --wait db`,
+`pytest -q` → `253 passed`.
+
+**Obmedzenia reprodukovateľnosti** — priznané, nie odstránené:
+
+- `pyproject.toml` určuje iba spodné hranice verzií a projekt nemá lock súbor.
+  Iný stroj môže dostať novšie knižnice; verzie v tabuľke sú tie, proti ktorým
+  baseline skutočne bežala.
+- `docker-compose.yml` používa obraz `postgres:16`, nie presnú verziu — iný
+  stroj môže dostať inú 16.x.
+- Projekt nemá CI. „Zelená baseline" znamená beh na jednom stroji (T. Hrubý),
+  nie automatickú kontrolu pri každom commite.

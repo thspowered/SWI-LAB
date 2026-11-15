@@ -203,6 +203,28 @@ Stavy, kódy zamietnutí ani HTTP statusy sa v C05 nemenili — mení sa vnútro
 jednej jednotky. Pred review v tíme prešla vetva tromi nezávislými kontrolami;
 čo našli a čo sa po nich zmenilo, je v evidence.
 
+## C08 — Controlled Change
+
+Zmena `CR-08` — **lehota na rozhodnutie o žiadosti** (48 h od podania). V C08
+sa kód nemení: vzniká rozhodnutie a plán overenia, implementácia je C09.
+
+- Change Request, analýza dopadu, varianty, rozhodnutie a odovzdanie do C09:
+  [docs/intent-and-change.md, časť C08](docs/intent-and-change.md#c08--controlled-change-cr-08)
+- baseline a test cases s výsledkami:
+  [docs/evidence-and-evolution.md, časť C08](docs/evidence-and-evolution.md#c08--controlled-change-baseline-a-overenie-dnešného-správania)
+
+**Východisková baseline:** commit `b0974e7` (`main`), špecifikácia v0.2.
+Obnovenie rovnakého stavu:
+
+```bash
+git checkout b0974e7            # alebo vetva C08 - kód aplikácie je rovnaký
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp .env.example .env
+docker compose up -d --wait db
+.venv/bin/python -m pytest -q                 # 253 passed
+.venv/bin/python scripts/mutation_check.py    # 34 mutácií, 0 prežilo
+```
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
