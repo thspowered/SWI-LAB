@@ -1485,7 +1485,7 @@ až C09 (AC-04).
 
 | Položka | Hodnota |
 | ------- | ------- |
-| **Kedy a nad čím** | 2026-11-15 10:55:54 UTC, `HEAD` = `f36e126`, kód aplikácie = `b0974e7` (skript to vypíše podľa `git diff` nad `src`, `pyproject.toml`, `docker-compose.yml`; beh tým nezastaví — v C09 sa kód zmení zámerne) |
+| **Kedy a nad čím** | 2026-11-15 11:27:42 UTC, `HEAD` = `29c3170`, kód aplikácie = `b0974e7` (skript to vypíše podľa `git diff` nad `src`, `pyproject.toml`, `docker-compose.yml`; beh tým nezastaví — v C09 sa kód zmení zámerne) |
 | **Prostredie** | `uvicorn swilab.main:app --port 8000` (PYTHONPATH=src), PostgreSQL 16.15 z `docker-compose.yml`, odtlačok schémy `1f96b2bbf6bf8c47` |
 | **Príkaz** | `.venv/bin/python scripts/c08_baseline_tc.py` → návratový kód `0` |
 | **Deň testu D** | 2026-11-22 (UTC) |
@@ -1498,20 +1498,28 @@ až C09 (AC-04).
 
 *If FAIL:* žiadny. *If BLOCKED:* žiadny.
 
-**Poradie návrhu a behu.** Expected je v `bbfbcfe` (10:55:15 UTC). Prvý beh
-prebehol na `bbfbcfe` o 10:55:25 UTC s rovnakými verdiktmi, ale výpis
-neukazoval query parametre `GET` požiadavky — z logu by nebolo vidieť presný
-request. Skript dostal úpravu **iba výpisu** (`f36e126`: query parametre a
-príznak necommitnutých zmien; Expected ani kroky sa nemenili) a záznam nižšie
-je beh na čistom `f36e126`.
+**Poradie návrhu a behu.** Expected je v `bbfbcfe` (10:55:15 UTC). Skript
+bežal na čistom strome trikrát, vždy s rovnakými verdiktmi a pozorovaniami;
+menil sa iba **výpis**, nikdy Expected ani kroky:
+
+| Beh | Commit | Čas (UTC) | Čo sa zmenilo pred behom |
+| --- | ------ | --------- | ------------------------ |
+| 1 | `bbfbcfe` | 10:55:25 | — prvý beh, 10 s po commite s Expected |
+| 2 | `f36e126` | 10:55:54 | výpis `GET` doplnený o query parametre, hlavička priznáva necommitnuté zmeny |
+| 3 | `29c3170` | 11:27:42 | po nezávislej kontrole: výpis URL presne tak, ako odišla (kódovaná — skopírovaná do `curl` vráti `200`, nekódovaná dávala `422`), filter `table_schema` v kroku 2 `TC-C08-03`, `BLOCKED` aj pri výpadku počas behu |
+
+Záznam nižšie je beh 3. Od behu 2 sa líši iba dvoma riadkami `HTTP GET`
+(r. 87 a 114) — čísla riadkov, na ktoré odkazujú tabuľky TC, platia pre oba.
 
 **Kontrola, že oracle nie je prázdny.** Zelený výsledok má cenu, len ak by
-chyba skončila červeno. Rovnaký skript sme preto pustili ešte dvakrát:
+chyba skončila červeno. Prvé dva kontrolné behy prebehli na `f36e126`, tretí
+na `29c3170`:
 
 | Kontrolný beh | Očakávanie | Výsledok |
 | ------------- | ---------- | -------- |
 | aplikácia s vloženou chybou — v kópii `src/` v `enter_blocking_state()` `if conflicts:` → `if False:` (BR-02 sa nevyhodnocuje), port 8001 | `TC-C08-02` a `TC-C08-03` musia padnúť, `TC-C08-01` nie (susedné intervaly sa neprekrývajú) | `TC-C08-01 PASS`, `TC-C08-02 FAIL`, `TC-C08-03 FAIL`, návratový kód `1`. V `TC-C08-02` vrátilo potvrdenie `200 PENDING_APPROVAL` a **nezávislý SQL dotaz našiel blokujúcu dvojicu `[(B1, B2)]`** — porušenie BR-02 odhalila perzistencia, nie odpoveď API. |
 | aplikácia nebeží (port 8009) | `BLOCKED`, nie `FAIL` ani `PASS` | `BLOCKED - infrastruktura nebezi: [Errno 61] Connection refused`, ďalší krok vypísaný, návratový kód `2` |
+| výpadok počas behu — na `29c3170` tretie HTTP volanie nahradené výnimkou `httpx.ConnectError` (simulácia v samostatnom procese, repozitár bez zmeny) | `BLOCKED`, nie traceback ani `FAIL` | po kroku 2 behu 2 `TC-C08-01`: `BLOCKED - infrastruktura vypadla pocas behu`, návratový kód `2` |
 
 Ako sa kontrolné behy spustili a čo vypísali (súhrnné riadky výpisu):
 
@@ -1563,11 +1571,11 @@ neuvádza ako vlastnosť skriptu, iba ako jeho hranicu.
   `TestClient`, nie cez bežiaci server).
 
 <details>
-<summary>Úplný výpis behu na <code>f36e126</code> (čísla riadkov, na ktoré odkazujú tabuľky TC)</summary>
+<summary>Úplný výpis behu 3 na <code>29c3170</code> (čísla riadkov, na ktoré odkazujú tabuľky TC)</summary>
 
 ```text
-  1  cas behu (UTC):   2026-11-15T10:55:54Z
-  2  HEAD:             f36e126
+  1  cas behu (UTC):   2026-11-15T11:27:42Z
+  2  HEAD:             29c3170
   3  kod aplikacie:    = b0974e7
   4  databaza:         postgresql://swilab:***@localhost:5433/swilab
   5  aplikacia:        http://127.0.0.1:8000
@@ -1652,7 +1660,7 @@ neuvádza ako vlastnosť skriptu, iba ako jeho hranicu.
  84    [OK  ] krok 2: precitat stlpce tabulky reservations (information_schema)
  85           expected: iba id, instrument_id, user_id, starts_at, ends_at, state, created_at - okamih podania ziadosti sa neuklada
  86           actual:   ['id', 'instrument_id', 'user_id', 'starts_at', 'ends_at', 'state', 'created_at']
- 87        HTTP GET /instruments/R1/availability?starts_at=2026-11-22T10:00:00+00:00&ends_at=2026-11-22T11:00:00+00:00
+ 87        HTTP GET /instruments/R1/availability?starts_at=2026-11-22T10%3A00%3A00%2B00%3A00&ends_at=2026-11-22T11%3A00%3A00%2B00%3A00
  88        -> 200 {"instrument_id": "R1", "starts_at": "2026-11-22T10:00:00Z", "ends_at": "2026-11-22T11:00:00Z", "status": "UNAVAILABLE", "reason": "PENDING_APPROVAL", "conflicting_reservation_ids": ["B1"]}
  89    [OK  ] krok 3: GET availability R1 [10:00, 11:00)
  90           expected: 200, UNAVAILABLE, reason PENDING_APPROVAL, kolizia [B1] (REQ-03, REQ-13)
@@ -1679,7 +1687,7 @@ neuvádza ako vlastnosť skriptu, iba ako jeho hranicu.
 111    [OK  ] krok 2: precitat stlpce tabulky reservations (information_schema)
 112           expected: iba id, instrument_id, user_id, starts_at, ends_at, state, created_at - okamih podania ziadosti sa neuklada
 113           actual:   ['id', 'instrument_id', 'user_id', 'starts_at', 'ends_at', 'state', 'created_at']
-114        HTTP GET /instruments/R1/availability?starts_at=2026-11-22T10:00:00+00:00&ends_at=2026-11-22T11:00:00+00:00
+114        HTTP GET /instruments/R1/availability?starts_at=2026-11-22T10%3A00%3A00%2B00%3A00&ends_at=2026-11-22T11%3A00%3A00%2B00%3A00
 115        -> 200 {"instrument_id": "R1", "starts_at": "2026-11-22T10:00:00Z", "ends_at": "2026-11-22T11:00:00Z", "status": "UNAVAILABLE", "reason": "PENDING_APPROVAL", "conflicting_reservation_ids": ["B1"]}
 116    [OK  ] krok 3: GET availability R1 [10:00, 11:00)
 117           expected: 200, UNAVAILABLE, reason PENDING_APPROVAL, kolizia [B1] (REQ-03, REQ-13)
