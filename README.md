@@ -225,11 +225,49 @@ docker compose up -d --wait db
 .venv/bin/python scripts/mutation_check.py    # 34 mutácií, 0 prežilo
 ```
 
+Test cases `TC-C08-01..03` proti **bežiacej** aplikácii — operácie cez HTTP,
+stav číta skript novým spojením priamo z databázy:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m uvicorn swilab.main:app --port 8000 &
+.venv/bin/python scripts/c08_baseline_tc.py   # 3× PASS, návratový kód 0
+```
+
+Skript robí `TRUNCATE` všetkých tabuliek — nespúšťať súčasne s `pytest` ani
+s `mutation_check.py`. Ak aplikácia alebo databáza nebeží, verdikt je
+`BLOCKED` (návratový kód 2), nie `FAIL`.
+
+## C08 Definition of Done
+
+- [x] jednoznačná východisková baseline a zrozumiteľné before správanie —
+  [evidence, krok 0](docs/evidence-and-evolution.md#krok-0--východisková-baseline-before);
+  obmedzenie, ktoré CR mení, doložené behom `TC-C08-03`
+- [x] dva krokované test cases so špecifikovanými dátami a Expected pred
+  vykonaním — `TC-C08-01`, `TC-C08-02` (+ `TC-C08-03`); Expected v `bbfbcfe`,
+  prvý beh o 10 s neskôr
+- [x] skutočne spustené na reálnej hranici a perzistencii — všetky tri cez HTTP
+  API nad PostgreSQL, stav čítaný priamo z databázy, dva behy po resete;
+  kontrolné behy: vložená chyba → `FAIL`, nebežiaca aplikácia → `BLOCKED`
+- [x] jeden vierohodný CR — `CR-08` so zdrojom a dokladom potreby (C02 R-2, I-01)
+- [x] Impact Matrix v relevantných oblastiach so zdôvodneným NO IMPACT,
+  vrátane inventára zapisovateľov (worker, import, admin neexistujú; priamy SQL áno)
+- [x] Options Matrix porovnávajúca reálne reakcie — päť variant vrátane
+  „bez zmeny kódu" a dôsledku nečinnosti
+- [ ] **peer-reviewed rozhodnutie** — návrh ACCEPT, varianta A; review
+  T. Krišicu v PR **čaká** (CA-1 až CA-6)
+- [x] explicitný ACCEPT handoff do C09 — ohraničená delta, nový oracle,
+  regresia, riziká `R-06`, `R-07`, stav PLANNED
+- [x] odkazy na existujúce živé dokumenty, evidence a známe obmedzenia —
+  CR v `intent-and-change.md`, test cases v `evidence-and-evolution.md`,
+  príkazy tu; žiadny nový dokument, pribudol iba skript `scripts/c08_baseline_tc.py`
+
+V C08 sa kód aplikácie nemenil: `git diff b0974e7 -- src tests` je prázdny.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
 - [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
-- [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure
+- [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure, C08 Change Request `CR-08`
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia, architektúra C03 (ADR-01), detailed design C05
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03 a C05
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03, C05, C07 (nálezy, register rizík) a C08 (baseline, test cases)
