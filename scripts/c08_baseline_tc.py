@@ -201,15 +201,14 @@ def schema_fingerprint(conn) -> str:
 
 
 def call(client: httpx.Client, method: str, path: str, **kwargs) -> httpx.Response:
+    """Posle request a vypise ho presne tak, ako odisiel - s kodovanou query
+    (napr. `+00:00` ako `%2B00:00`), aby sa dal skopirovat do curl."""
     body = kwargs.get("json")
-    shown = path
+    response = client.request(method, path, **kwargs)
+    shown = response.request.url.raw_path.decode()
     for value, name in NAMES.items():
         shown = shown.replace(str(value), name)
-    params = kwargs.get("params")
-    if params:
-        shown += "?" + "&".join(f"{k}={v}" for k, v in params.items())
     print(f"      HTTP {method} {shown}" + (f"  {_named(body)}" if body else ""))
-    response = client.request(method, path, **kwargs)
     print(f"      -> {response.status_code} {_named(_body(response))}")
     return response
 
@@ -374,7 +373,8 @@ def tc_03(client, run: int) -> Case:
             row[0]
             for row in conn.execute(
                 "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'reservations' ORDER BY ordinal_position"
+                "WHERE table_schema = 'public' AND table_name = 'reservations' "
+                "ORDER BY ordinal_position"
             )
         ]
         case.step(
@@ -463,6 +463,22 @@ def main() -> int:
         print("dalsi krok: docker compose up -d --wait db; spustit uvicorn (docstring)")
         return 2
 
+    try:
+        verdicts = run_all()
+    except (psycopg.OperationalError, httpx.TransportError) as exc:
+        # Vypadok uprostred behu je prekazka, nie business vysledok - FAIL by
+        # tvrdil, ze system sa sprava zle, hoci sa nedal ani overit.
+        print(f"\nBLOCKED - infrastruktura vypadla pocas behu: {exc}")
+        print("dalsi krok: overit databazu a aplikaciu, beh zopakovat od zaciatku")
+        return 2
+
+    print("\n=== suhrn ===")
+    for tc_id, verdict in verdicts.items():
+        print(f"{tc_id}: {verdict}")
+    return 0 if all(v == "PASS" for v in verdicts.values()) else 1
+
+
+def run_all() -> dict:
     verdicts = {}
     with httpx.Client(base_url=BASE_URL, timeout=10) as client:
         for tc in (tc_01, tc_02, tc_03):
@@ -480,11 +496,7 @@ def main() -> int:
             verdicts[case.tc_id] = verdict
         with connect() as conn:
             reset_and_seed_common(conn)
-
-    print("\n=== suhrn ===")
-    for tc_id, verdict in verdicts.items():
-        print(f"{tc_id}: {verdict}")
-    return 0 if all(v == "PASS" for v in verdicts.values()) else 1
+    return verdicts
 
 
 if __name__ == "__main__":
