@@ -865,7 +865,8 @@ classDiagram
         <<module>>
         +certification_covers(valid_until, starts_at) bool
         +may_cancel_confirmed(starts_at, now) bool
-        +approval_request_is_alive(starts_at, now) bool
+        +approval_request_is_alive(decision_deadline, now) bool
+        +decision_deadline(submitted_at, starts_at) datetime
         +is_interval_valid(starts_at, ends_at) bool
     }
     class Clock {
@@ -1105,8 +1106,8 @@ Na tieto rozhodnutia sa odkazujú testy a porovnanie s kódom.
 <<interface>> TransitionPolicy                       modul domain/transitions.py
 
 confirm_decision(state, starts_at, now, requires_approval) : Decision
-cancel_decision(state, starts_at, now)                     : Decision
-expiry_decision(state, starts_at, now)                     : Decision
+cancel_decision(state, starts_at, now, *, decision_deadline) : Decision   # v0.4
+expiry_decision(state, starts_at, now, *, decision_deadline) : Decision   # v0.4
 
 Decision = (target: ReservationState | None,
             rejection: ErrorCode | None,
@@ -1225,8 +1226,8 @@ classDiagram
     class TransitionPolicy {
         <<interface>>
         +confirm_decision(state, starts_at, now, requires_approval) Decision
-        +cancel_decision(state, starts_at, now) Decision
-        +expiry_decision(state, starts_at, now) Decision
+        +cancel_decision(state, starts_at, now, decision_deadline) Decision
+        +expiry_decision(state, starts_at, now, decision_deadline) Decision
     }
     class Decision {
         <<value object>>
@@ -1321,7 +1322,7 @@ sequenceDiagram
     S-->>Op: Reservation(state, starts_at)
     Op->>Pre: _require_user(by), _require_authorized()
     Pre-->>Op: žiadateľ je vlastník alebo SUPERVISOR
-    Op->>Pol: cancel_decision(state, starts_at, now)
+    Op->>Pol: cancel_decision(state, starts_at, now, decision_deadline)
     Note over Pol: bez I/O — iba tabuľka z C05.8
     Pol-->>Op: Decision(target, rejection)
 
@@ -1353,7 +1354,7 @@ sequenceDiagram
 ## C05.7 Významné operácie (Important methods / operations)
 
 ```
-Operation:        cancel_decision(state, starts_at, now)
+Operation:        cancel_decision(state, starts_at, now, decision_deadline=...)
 Responsibility:   L-3 — rozhodnúť, čo zrušenie urobí s rezerváciou v danom stave
 Input:            zdrojový stav, začiatok rezervácie, čas operácie
 Output:           Decision
@@ -1432,8 +1433,8 @@ Failure behavior: DomainError(EXPIRED) po commite; rozhoduje expiry_decision
 | Zdrojový stav | Podmienka | `target` | `rejection` | Zdroj |
 | ------------- | --------- | -------- | ----------- | ----- |
 | `DRAFT` | — | `CANCELLED` | — | `REQ-07`, `N-03` |
-| `PENDING_APPROVAL` | `now < starts_at` | `CANCELLED` | — | `REQ-14` |
-| `PENDING_APPROVAL` | `now >= starts_at` | `EXPIRED` | `EXPIRED` | `BR-08`, `N-04` |
+| `PENDING_APPROVAL` | `now < decision_deadline` *(v0.4)* | `CANCELLED` | — | `REQ-14` |
+| `PENDING_APPROVAL` | `now >= decision_deadline` *(v0.4)* | `EXPIRED` | `EXPIRED` | `BR-08`, `N-04` |
 | `CONFIRMED` | `now + 60 min < starts_at` | `CANCELLED` | — | `REQ-08` |
 | `CONFIRMED` | `now + 60 min >= starts_at` | — | `TOO_LATE` | `BR-03` |
 | `CANCELLED` | — | — | — | `REQ-09` |
@@ -1452,10 +1453,15 @@ Failure behavior: DomainError(EXPIRED) po commite; rozhoduje expiry_decision
 
 | Zdrojový stav | Podmienka | `target` | `rejection` | Zdroj |
 | ------------- | --------- | -------- | ----------- | ----- |
-| `PENDING_APPROVAL` | `now >= starts_at` | `EXPIRED` | `EXPIRED` | `BR-08`, `REQ-15` |
+| `PENDING_APPROVAL` | `now >= decision_deadline` *(v0.4)* | `EXPIRED` | `EXPIRED` | `BR-08`, `REQ-15` |
+| `PENDING_APPROVAL` | `decision_deadline` je `NULL` *(v0.4)* | — | — | chyba programu (`ValueError`), `DD-9` |
 | každý iný prípad | — | — | — | `N-05` |
 
-Riadok `PENDING_APPROVAL` / `now >= starts_at` v tabuľke zrušenia **je**
+Do v0.3 stálo v podmienkach oboch tabuliek `starts_at`. Od v0.4 je to
+uložený termín rozhodnutia (DD-8), ktorý je skorší z *podanie + 48 h*
+a `starts_at` — hranica `starts_at` je v ňom teda obsiahnutá.
+
+Riadok `PENDING_APPROVAL` / `now >= decision_deadline` v tabuľke zrušenia **je**
 `expiry_decision` — zrušenie ho preberá, nemá vlastnú kópiu. Vypršanie je
 prechod riadený časom, nie operáciou, a preto má jedno znenie pre `OP-04`
 aj `OP-05`.
@@ -1470,7 +1476,8 @@ politika vrátiť:
 cancel_reservation(session, id, by, now):
     r = _lock_reservation(id)                        # L-1
     over žiadateľa a oprávnenie                      # L-2
-    d = cancel_decision(r.state, r.starts_at, now)   # L-3, bez I/O
+    d = cancel_decision(r.state, r.starts_at, now,
+                        decision_deadline=r.decision_deadline)   # L-3, bez I/O
 
     podľa d.target:
         CANCELLED    -> zápis menovaným literálom, commit   # L-7
@@ -1539,7 +1546,8 @@ vzniklo vnútri tejto ochrany.
 | ----- | --- | -------------- |
 | lehota zrušenia potvrdenej rezervácie (60 min, `BR-03`) | konštanta `rules.CANCELLATION_LEAD_TIME` | `test_cancel_decision_table`, `test_rule_boundaries_are_strict` |
 | hranica „rezervácia už začala" pri potvrdení (`REQ-06`) | `confirm_decision()` — porovnanie je priamo v politike, nemá pomenovaný predikát | `test_confirm_decision_table_for_draft` |
-| živosť žiadosti (`BR-08`) | **dve miesta naraz**: `rules.approval_request_is_alive()` a SQL podmienka v `_overlapping_blocking()` | `test_liveness_in_the_overlap_query_agrees_with_the_policy` |
+| živosť žiadosti (`BR-08`) | **dve miesta naraz**: `rules.approval_request_is_alive()` a SQL podmienka v `_overlapping_blocking()`. Od v0.4 obe porovnávajú ten istý stĺpec `decision_deadline` (DD-8) | `test_liveness_in_the_overlap_query_agrees_with_the_policy`, `test_liveness_agrees_with_the_policy_at_the_48h_boundary` |
+| lehota na rozhodnutie (`BR-08` v0.4) | konštanta `rules.DECISION_PERIOD`, termín počíta `rules.decision_deadline()`, zapisuje strážca | `test_decision_period_is_48_hours`, `test_decision_deadline_is_the_earlier_of_period_and_start` |
 | nový stav rezervácie | riadok v `cancel_decision()` — bez neho operácia skončí `AssertionError`; potvrdenie a vypršanie ho berú riadkom „každý iný"; ak má blokovať, aj `BLOCKING_STATES` | `test_policy_is_total_and_returns_only_shapes_from_the_contract`, `test_zoznam_blokujucich_stavov_sedi_s_kodom` |
 | nová operácia, ktorá mení stav | nová funkcia `*_decision` v politike a operácia v lifecycle, ktorá ju vykoná; blokujúci cieľ iba cez strážcu | `test_kazda_funkcia_sluzby_patri_prave_jednemu_prvku`, `test_operacie_rozhoduju_iba_cez_politiku` (treba ju doň doplniť), `test_blokujuci_stav_zapisuje_iba_vlastnik_invariantu` |
 | poradie zamietnutí (`DD-7`) | stav a čas: poradie vetiev v politike; ostatné: poradie krokov v operácii | `test_confirm_decision_judges_state_before_time`, `test_authorization_is_judged_before_the_state`, `test_allocation_preconditions_keep_one_order_on_both_paths` |
@@ -1758,7 +1766,7 @@ Pri rezervácii, ktorá žiadosťou nikdy nebola, je `NULL`.
 | Prvok | Zmena | Prečo práve tu |
 | ----- | ----- | -------------- |
 | `domain/rules.py` | `DECISION_PERIOD = 48 h` vedľa `CANCELLATION_LEAD_TIME` (`CA-5`); `decision_deadline(submitted_at, starts_at)` = `min(submitted_at + DECISION_PERIOD, starts_at)`; `approval_request_is_alive(decision_deadline, now)` = `now < decision_deadline` | časové pravidlá sú v doméne a mimo nej ich nikto nepoužíva (DD-1) |
-| `domain/transitions.py` | `expiry_decision(state, starts_at, decision_deadline, now)`, `cancel_decision(state, starts_at, decision_deadline, now)`; tvary `Decision` bez zmeny. Žiadosť bez termínu je chyba programu (`ValueError`), nie tichý predpoklad. Dôvod zamietnutia podľa príčiny: *uplynula lehota na rozhodnutie* / *termín rezervácie už začal* | politika rozhoduje, nepozná perzistenciu ani hodiny |
+| `domain/transitions.py` | `expiry_decision(state, starts_at, now, *, decision_deadline)`, `cancel_decision(state, starts_at, now, *, decision_deadline)` — termín je **povinný pomenovaný** parameter: dva susedné časy v poradí by sa dali nepozorovane vymeniť a predvolená hodnota by bola presne `NULL`, ktorý zakazuje `CA-6`. Tvary `Decision` bez zmeny. Žiadosť bez termínu je chyba programu (`ValueError`), nie tichý predpoklad. Dôvod zamietnutia podľa príčiny: *uplynula lehota na rozhodnutie* / *termín rezervácie už začal* | politika rozhoduje, nepozná perzistenciu ani hodiny |
 | `confirm_decision()` | **bez zmeny** — o vetve `PENDING_APPROVAL` rozhoduje `requires_approval` ako doteraz | plán C08: „politika ostáva čistá" |
 | `enter_blocking_state()` | pri vstupe do `PENDING_APPROVAL` zapíše `decision_deadline = decision_deadline(now, starts_at)` — **pred** zápisom stavu, v tej istej transakcii | jediné miesto, kde vzniká blokujúci stav (ADR-01); termín je súčasť toho, čo `PENDING_APPROVAL` znamená. Poradie zápisu: obmedzenie DD-9 nie je odložiteľné, takže riadok nesmie byť ani na okamih `PENDING_APPROVAL` bez termínu |
 | `_overlapping_blocking()` | `or_(state == CONFIRMED, starts_at > now)` → `or_(state == CONFIRMED, decision_deadline > now)` | druhá forma živosti; vďaka DD-9 rovnocenná predikátu |
