@@ -205,6 +205,9 @@ def call(client: httpx.Client, method: str, path: str, **kwargs) -> httpx.Respon
     shown = path
     for value, name in NAMES.items():
         shown = shown.replace(str(value), name)
+    params = kwargs.get("params")
+    if params:
+        shown += "?" + "&".join(f"{k}={v}" for k, v in params.items())
     print(f"      HTTP {method} {shown}" + (f"  {_named(body)}" if body else ""))
     response = client.request(method, path, **kwargs)
     print(f"      -> {response.status_code} {_named(_body(response))}")
@@ -436,7 +439,10 @@ def header() -> None:
          "docker-compose.yml"], cwd=REPO
     ).returncode
     print(f"cas behu (UTC):   {datetime.now(UTC):%Y-%m-%dT%H:%M:%SZ}")
-    print(f"HEAD:             {head}")
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True
+    ).stdout.strip()
+    print(f"HEAD:             {head}" + (" + necommitnute zmeny" if dirty else ""))
     print(f"kod aplikacie:    {'= ' + BASELINE if app_diff == 0 else 'LISI SA od ' + BASELINE}")
     print(f"databaza:         {_masked(DATABASE_URL)}")
     print(f"aplikacia:        {BASE_URL}")
