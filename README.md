@@ -51,7 +51,8 @@ Predpoklady: nainštalovaný a **spustený** Docker, Python **3.12+**.
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.lock
+pip install --no-deps --no-build-isolation -e .
 
 cp .env.example .env
 docker compose up -d --wait db
@@ -59,6 +60,11 @@ docker compose up -d --wait db
 pytest -v
 uvicorn swilab.main:app --reload
 ```
+
+Závislosti sa inštalujú zo **zamknutého** súboru `requirements-dev.lock`, nie
+z `pyproject.toml` — ten uvádza iba spodné hranice a dával by pri každej
+inštalácii iné verzie (časť C09). Celú kontrolu, ktorú robí CI, spustí lokálne
+`scripts/ci_check.sh`.
 
 Aplikácia beží na `http://127.0.0.1:8000`, kontrola stavu na `/health`,
 interaktívna dokumentácia API na `/docs`.
@@ -275,6 +281,62 @@ behu, verdikt je `BLOCKED` (návratový kód 2), nie `FAIL`.
   príkazy tu; žiadny nový dokument, pribudol iba skript `scripts/c08_baseline_tc.py`
 
 V C08 sa kód aplikácie nemenil: `git diff b0974e7 -- src tests` je prázdny.
+
+## C09 — Integration, CI and Release Record
+
+Šablóna zo zadania C09. Vyplnené je iba to, čo naozaj platí; čo ešte
+neprebehlo, je výslovne označené (`PENDING`, `NOT RUN`). Podrobné záznamy sú
+v [evidence, časť C09](docs/evidence-and-evolution.md#c09--integrácia-ci-a-reprodukovateľný-release).
+
+C09 sa delí na **vetvu A** (CI, zamknuté závislosti, artefakt — hotová)
+a **vetvu B** (implementácia `CR-08` — PENDING).
+
+### Príkazy
+
+Celú kontrolu, ktorú robí CI, spustí jeden príkaz — CI volá ten istý skript:
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.lock
+pip install --no-deps --no-build-isolation -e .
+docker compose up -d --wait db
+scripts/ci_check.sh            # návratový kód 0 = všetkých 6 krokov prešlo
+```
+
+Skript skončí na prvom zlyhanom kroku a vypíše, ktorý to bol. Ak prostredie
+nezodpovedá locku, skončí už v kroku 1 — zelená na iných verziách by nič
+nedokazovala. Artefakt a jeho SHA256 nájdeš v `dist/` a `dist/SHA256SUMS`.
+
+**Obnova locku** — iba keď sa mení `pyproject.toml`, a vždy z čistého venv:
+
+```bash
+python3.12 -m venv /tmp/lockenv && /tmp/lockenv/bin/pip install ".[dev]"
+/tmp/lockenv/bin/pip freeze --exclude-editable | grep -v '^swilab'   # -> requirements-dev.lock
+```
+
+Runtime lock sa vygeneruje rovnako, iba `pip install -c requirements-dev.lock .`
+bez `[dev]`. Hlavičku súborov zachovaj.
+
+### Záznam
+
+| Položka | Stav |
+| ------- | ---- |
+| **C08 Change Card a rozhodnutie** | [CR-08](docs/intent-and-change.md#c08--controlled-change-cr-08) — **ACCEPT, varianta A** so zmenou `CA-5` (T je konštanta). Peer review [PR #11](https://github.com/thspowered/SWI-LAB/pull/11). Podmienky ACCEPT: (1)(2) review, (3) [`ADR-02`](docs/architecture-and-decisions.md#adr-02--migrácie-schémy-pred-zmenou-v-c09) migrácie, (4) špecifikácia — v0.3 uzavrela F-03, `CR-08` ide do **v0.4** ([PR #12](https://github.com/thspowered/SWI-LAB/pull/12)). |
+| **Before / after** | before: `b0974e7` — kód je od neho nezmenený (`git diff b0974e7 -- src` je prázdny aj na tejto vetve). after: **PENDING** — vetva B. |
+| **Dotknuté tvrdenia, nové AC, regresia** | nové: `AC-01` až `AC-10` z CR-08. Regresia: `TC-C08-01/02`, celá sada, súbeh REQ-05 a REQ-16. |
+| **Zmenený kód / dáta / konfigurácia / ADR** | vetva A: CI, lock, build tooling, žiadny `src/`. Vetva B: **PENDING**, rozsah je ohraničená delta z C08. |
+| **Peer review** | vetva A: **PENDING** (PR tejto vetvy). Vetva B: **PENDING**. |
+| **Nové správanie (AC-01..AC-10)** | **NOT RUN** — vetva B ešte neexistuje. |
+| **Regresia `TC-C08-01`** | **PASS** — `ci_check.sh` krok 5, commit `35d684f`, lokálne aj v CI |
+| **Regresia `TC-C08-02`** | **PASS** — tamtiež |
+| **Skutočná integračná hranica** | HTTP → aplikácia (`uvicorn`) → PostgreSQL 16. Stav po commite číta `c08_baseline_tc.py` **novým spojením priamo z databázy**, nie z odpovede API. Bez skutočnej databázy sada nebeží vôbec. |
+| **Lock + runtime + schéma + konfigurácia** | `requirements.lock` (24 runtime balíčkov), `requirements-dev.lock` (35); Python 3.12; schéma z `models.py` cez `create_all()`, bez migrácií podľa `ADR-02`; jediná konfigurácia `DATABASE_URL` (`.env.example`). |
+| **Príkazy pre čistý checkout** | časť *Príkazy* vyššie a *Ako to spustiť* |
+| **CI** | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) pri push a PR. Prvý beh: [`success`](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765) na `35d684f` — všetkých 6 krokov, rovnaké výsledky ako lokálne. |
+| **Nezávislý reprodukujúci člen** | **PENDING** — T. Hrubý (druhý člen; vetvu A pripravil T. Krišica) |
+| **Artefakt** | `swilab-0.2.0-py3-none-any.whl`, reprodukovateľný — ten istý commit dá bajtovo ten istý wheel. Pre `35d684f`: SHA256 `a4e80878…fb7592`, **zhodný z macOS lokálne aj z Linuxu v CI**. **Verzia `0.2.0` je predbežná** — či bude `0.4.0`, rozhodne vetva B. |
+| **Obnova / rollback** | Rollback kódu **nevráti dáta v databáze**. Pri `CR-08` je postup rollbacku zapísaný v analýze dopadu (jeden `UPDATE`, potom starý kód); vyskúšať ho treba vo vetve B. Databáza nemá volume, prestavba je contingency z `R-04`. |
+| **Rozhodnutie o RC** | **nerozhodnuté** — bez vetvy B nie je čo vydať. Owner: tím. |
 
 ## Dokumentácia
 
