@@ -1312,3 +1312,122 @@ prázdny), nový venv podľa README, `docker compose up -d --wait db`,
   stroj môže dostať inú 16.x.
 - Projekt nemá CI. „Zelená baseline" znamená beh na jednom stroji (T. Hrubý),
   nie automatickú kontrolu pri každom commite.
+
+### Krok 2 — test cases dnešného správania (návrh pred behom)
+
+Tri test cases. Prvé dva overujú to, čo CR-08 **nesmie rozbiť** (BR-02 pri
+schválení a pri potvrdení), tretí zachytáva **obmedzenie, ktoré CR-08 mení** —
+je to doklad, že požiadavka rieši skutočný problém, nie vymyslený.
+
+*Expected* je odvodené zo špecifikácie v0.2 a zapísané **pred prvým behom**
+(tento commit). *Actual* sa dopĺňa až po vykonaní, v ďalšom commite. Rovnaké
+Expected je prepísané v `scripts/c08_baseline_tc.py`, ktorý test cases vykoná.
+
+**Spoločné pre všetky tri:**
+
+- **Baseline:** `b0974e7`, schéma z `models.py` (krok 0), runtime podľa kroku 0.
+- **Rozhranie:** skutočné HTTP API bežiacej aplikácie (`uvicorn`, port 8000)
+  nad PostgreSQL 16 z `docker-compose.yml`. Žiadny mock, žiadna testovacia
+  session.
+- **Oracle:** stav sa po operácii číta **novým spojením priamo z databázy**
+  (SQL cez `psycopg`), nie z odpovede API ani cez ORM aplikácie. Invariant BR-02
+  overuje vlastný SQL dotaz skriptu — dvojice blokujúcich rezervácií toho istého
+  prístroja, ktoré sa prekrývajú podľa BR-01 (`a.start < b.end ∧ b.start < a.end`),
+  pričom blokuje `CONFIRMED` a žiadosť so `starts_at` v budúcnosti. Dotaz je
+  napísaný nezávisle od `_overlapping_blocking()` v aplikácii.
+- **Dáta:** prístroj `R1` = *Zeiss LSM 900*, `MICROSCOPE`, aktívny,
+  `requires_approval = true` (exkluzívny, BR-02). Používatelia `S1`, `S2`
+  (`STUDENT`) s certifikátom `MICROSCOPE` platným do D + 30 dní, `V1`
+  (`SUPERVISOR`, nie je vlastníkom žiadnej rezervácie). Pevné UUID
+  `00000000-0000-0000-0000-0000000000xx`, aby sa výpis dal čítať.
+- **Čas:** všetky intervaly ležia v dni **D = dátum behu + 7 dní**, v UTC.
+  API číta skutočné hodiny servera a zvonku sa posunúť nedajú, takže
+  termín musí byť v budúcnosti. Intervaly sú polootvorené `[start, end)`.
+- **Príprava:** `TRUNCATE` všetkých tabuliek a `INSERT` presných riadkov.
+  Prístroje, používatelia a certifikáty nemajú v v0.2 API (TBD-02); rezervácie
+  sa vkladajú priamo v požadovanom stave rovnako ako vo fixtures testov.
+- **Opakovanie:** každý test case sa vykoná dvakrát; pred druhým behom sa dáta
+  znova resetujú. Verdikt platí, len ak oba behy dajú **rovnaké** pozorovania.
+
+#### C08 / TC-C08-01 — schválenie žiadosti susediacej s potvrdenou rezerváciou (pozitívny)
+
+| Pole | Obsah |
+| ---- | ----- |
+| **Test basis** | REQ-11 (schválenie), BR-01 (susedné intervaly sa neprekrývajú), BR-02 — špecifikácia v0.2 @ `b0974e7`. Riziko: N/A. Pre CR-08 je to regresný základ AC-01 a AC-07. |
+| **Preconditions + roly** | Izolovaná databáza. `B1` = `CONFIRMED`, `R1`, `[D 10:00, D 11:00)`, vlastník `S2`. `B2` = `PENDING_APPROVAL`, `R1`, `[D 11:00, D 12:00)`, vlastník `S1` s platným certifikátom. Schvaľuje `V1` — `SUPERVISOR`, nie vlastník `B2` (BR-07). |
+| **Test data** | Intervaly v UTC, polootvorené. Prístroj vyžaduje schválenie, takže `B2` sa môže stať alokáciou iba cez OP-05. |
+
+| # | Akcia / vstup | Expected PRED behom | Actual PO behu | Dôkaz |
+| - | ------------- | ------------------- | -------------- | ----- |
+| 1 | reset + vložiť `R1`, `B1`, `B2` | presne jedna `CONFIRMED` (`B1`); `B2` čaká (`PENDING_APPROVAL`) | *doplní sa po behu* | |
+| 2 | nezávisle prečítať uložené intervaly a stavy (SQL) | `B1 [10:00, 11:00)`, `B2 [11:00, 12:00)`; žiadna blokujúca dvojica v prekryve | | |
+| 3 | `POST /reservations/{B2}/approve`, `requested_by = V1` | `200`, `state = CONFIRMED` — podmienky REQ-11 sú splnené, susedný interval nekoliduje | | |
+| 4 | znova načítať commitnutý stav novým spojením | `B1` aj `B2` `CONFIRMED`; žiadna blokujúca dvojica v prekryve | | |
+| 5 | reset a celé zopakovať | ten istý výsledok — test sa dá opakovať bez zmeny vstupov | | |
+
+**Final postcondition / oracle:** v databáze sú dve `CONFIRMED` rezervácie `R1`
+a dotaz na blokujúce prekryvy vráti prázdny výsledok.
+**Čo nie je pokryté:** súbežné schválenie dvoch kolidujúcich žiadostí — to je
+samostatný test súbehu (`test_concurrent_approvals_of_colliding_requests`).
+
+#### C08 / TC-C08-02 — potvrdenie rezervácie prekrývajúcej sa s potvrdenou (negatívny)
+
+| Pole | Obsah |
+| ---- | ----- |
+| **Test basis** | REQ-04 (potvrdenie len bez prekryvu s blokujúcim stavom), BR-02, BR-01 — v0.2 @ `b0974e7`. Kontrakt zamietnutia: kód `OVERLAP`, HTTP `409` (`main.py`, `STATUS_BY_CODE`). Pre CR-08 regresný základ AC-07. |
+| **Preconditions + roly** | `B1` = `CONFIRMED`, `R1`, `[D 10:00, D 11:00)`, vlastník `S2`. `B2` = **`DRAFT`**, `R1`, `[D 10:30, D 11:30)`, vlastník `S1` s platným certifikátom. Potvrdzuje vlastník `S1` (BR-06). |
+| **Prečo `B2` je `DRAFT`, nie `PENDING_APPROVAL`** | Živá žiadosť prekrývajúca sa s `CONFIRMED` je v v0.2 stav, ktorý BR-02 zakazuje — legálne do nej nevedie žiadna operácia. Jediná skutočná cesta, ako sa `B2` dostane k rozhodnutiu o BR-02, je potvrdenie z `DRAFT`. Keby sme `B2` vložili ako žiadosť, testovali by sme poškodené dáta, nie kontrakt. |
+| **Test data** | Prekryv `[10:30, 11:00)` — čiastočný, nie dotyk. Prístroj vyžaduje schválenie: bez prekryvu by potvrdenie viedlo do `PENDING_APPROVAL`, takže test pokrýva aj cestu k žiadosti. |
+
+| # | Akcia / vstup | Expected PRED behom | Actual PO behu | Dôkaz |
+| - | ------------- | ------------------- | -------------- | ----- |
+| 1 | reset + vložiť `R1`, `B1`, `B2` | iba `B1` je `CONFIRMED`; `B2` `DRAFT` | *doplní sa po behu* | |
+| 2 | nezávisle prečítať východiskový stav (SQL) | prekryv v čase `B1`–`B2` existuje, blokujúca dvojica nie (druhé potvrdenie neexistuje) | | |
+| 3 | `POST /reservations/{B2}/confirm`, `requested_by = S1` | zamietnuté: `409`, `code = OVERLAP` | | |
+| 4 | prečítať uložený stav po rollbacku novým spojením | `B1` bez zmeny (celý riadok), `B2` zostáva `DRAFT`; žiadna blokujúca dvojica v prekryve | | |
+| 5 | reset a celé zopakovať | ten istý výsledok | | |
+
+**Final postcondition / oracle:** riadok `B1` je bajtovo rovnaký ako pred
+operáciou, `B2` je `DRAFT`, dotaz na blokujúce prekryvy je prázdny.
+**Čo nie je pokryté:** dve súbežné potvrdenia — `test_concurrent_conflicting_confirmations`.
+
+#### C08 / TC-C08-03 — zabudnutá žiadosť blokuje prístroj až do začiatku (charakterizácia)
+
+| Pole | Obsah |
+| ---- | ----- |
+| **Test basis** | BR-08 (žiadosť je živá, kým `currentTime < starts_at`), REQ-03 a REQ-13 (živá žiadosť blokuje, dôvod `PENDING_APPROVAL`), REQ-04 (potvrdenie prekrývajúcej sa rezervácie je zamietnuté), REQ-11 (schválenie živej žiadosti) — v0.2 @ `b0974e7`. Je to **old accepted behavior**, ktoré CR-08 mení. |
+| **Preconditions + roly** | `B1` = `PENDING_APPROVAL`, `R1`, `[D 10:00, D 11:00)`, vlastník `S1`; jej `DRAFT` vznikol pred 10 dňami (`created_at = beh − 10 dní`). `B2` = `DRAFT`, `R1`, `[D 10:00, D 11:00)`, vlastník `S2`. Schvaľuje `V1`. |
+| **Test data** | Kedy bola `B1` podaná ako žiadosť, sa nastaviť nedá — systém ten okamih neukladá. `created_at` je najbližší údaj, aký baseline má. |
+
+| # | Akcia / vstup | Expected PRED behom | Actual PO behu | Dôkaz |
+| - | ------------- | ------------------- | -------------- | ----- |
+| 1 | reset + vložiť `R1`, `B1`, `B2` | `B1` `PENDING_APPROVAL`, `B2` `DRAFT` | *doplní sa po behu* | |
+| 2 | prečítať stĺpce `reservations` (`information_schema`) | iba `id, instrument_id, user_id, starts_at, ends_at, state, created_at` — okamih podania sa neukladá | | |
+| 3 | `GET /instruments/{R1}/availability?starts_at=D 10:00&ends_at=D 11:00` | `200`, `UNAVAILABLE`, `reason = PENDING_APPROVAL`, kolízia `[B1]` | | |
+| 4 | `POST /reservations/{B2}/confirm`, `requested_by = S2` | zamietnuté: `409 OVERLAP` — živá žiadosť blokuje | | |
+| 5 | `POST /reservations/{B1}/approve`, `requested_by = V1` | `200`, `CONFIRMED` — lehota na rozhodnutie neexistuje | | |
+| 6 | prečítať uložený stav novým spojením | `B1` `CONFIRMED`, `B2` `DRAFT` | | |
+| 7 | reset a celé zopakovať | ten istý výsledok | | |
+
+**Final postcondition / oracle:** `B1` `CONFIRMED`, `B2` `DRAFT`.
+**Čo test znamená:** `PASS` tu **nie je** dobrá správa o systéme — potvrdzuje,
+že obmedzenie z CR-08 skutočne existuje. Po implementácii CR-08 (C09) sa
+Expected krokov 2–5 mení: okamih podania bude uložený, žiadosť podaná pred
+viac než 48 h nebude blokovať (`AVAILABLE`), `B2` prejde do
+`PENDING_APPROVAL` a schválenie `B1` skončí `409 EXPIRED`. Test sa tak stane
+oracle novej požiadavky.
+**Čo nie je pokryté:** hranica 48:00:00 — na baseline neexistuje, overí ju
+až C09 (AC-04).
+
+#### Súbeh
+
+Zadanie žiada pre súbežné potvrdenia samostatný test s dvoma súperiacimi
+operáciami. Ten v projekte existuje od C03 a beží v každej sade
+(`tests/test_concurrency_req05.py`): `test_concurrent_conflicting_confirmations`
+(REQ-05, dve potvrdenia), `test_concurrent_approvals_of_colliding_requests`
+(REQ-05, dve schválenia), `test_concurrent_cancel_and_confirm_on_same_reservation`
+a `test_concurrent_approve_and_reject_on_same_request` (REQ-16). Dve
+vlákna, každé s vlastnou session proti Postgresu, štartujú spolu na bariére
+na vstupe do operácie, v ôsmich kolách; test tvrdí aj konkrétne business
+výsledky, nie iba počet blokujúcich rezervácií. Na baseline prechádzajú ako súčasť `253 passed` (krok 0). Pre CR-08 sú
+regresnými testami AC-07.
