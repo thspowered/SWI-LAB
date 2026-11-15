@@ -261,7 +261,7 @@ behu, verdikt je `BLOCKED` (návratový kód 2), nie `FAIL`.
   „bez zmeny kódu" a dôsledku nečinnosti
 - [ ] **peer-reviewed rozhodnutie** — návrh ACCEPT, varianta A; review
   T. Krišicu **čaká** (CA-1 až CA-7, vrátane prijatia za rolu vedúceho).
-  Vetva zatiaľ nie je zverejnená a PR neexistuje.
+  Review prebieha v [PR #11](https://github.com/thspowered/SWI-LAB/pull/11).
 - [ ] **obnovenie baseline druhým členom** — postup je vyššie; beh zatiaľ
   prebehol iba na stroji T. Hrubého (úloha pre reviewera)
 - [x] ACCEPT handoff do C09 — ohraničená delta, nový oracle, regresia,

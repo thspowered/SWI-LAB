@@ -424,8 +424,8 @@ Project Frame odstraňuje.
 ### Peer reviewer and challenged assumption
 
 **Peer reviewer: Tomáš Krišica** — review prebehne v pull requeste tejto
-vetvy, rovnako ako pri C03 a C05. **Stav: čaká.** Vetva zatiaľ nie je
-zverejnená a PR neexistuje; vznikne, keď ho tím otvorí. Výsledok review sem
+vetvy — [PR #11](https://github.com/thspowered/SWI-LAB/pull/11), otvorený
+2026-11-15 — rovnako ako pri C03 a C05. **Stav: čaká.** Výsledok review sem
 zapíše reviewer — kým sa to nestane, rozhodnutie nižšie je **návrh**, nie
 peer-reviewed rozhodnutie.
 
