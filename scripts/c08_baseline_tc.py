@@ -434,8 +434,15 @@ def tc_03(client, run: int) -> Case:
         4, "POST confirm(B2), potvrdzuje vlastnik S2",
         "200, state PENDING_APPROVAL a v odpovedi termin rozhodnutia - B1 "
         "neblokuje (AC-03), R1 vyzaduje schvalenie (REQ-10, AC-06)",
+        # Do pozorovania ide iba to, ci termin v odpovedi je - nie jeho
+        # hodnota. Ta zavisi od skutocnych hodin servera, takze dva behy by
+        # sa v nej vzdy lisili o cas medzi nimi a porovnanie behov by hlasilo
+        # rozdiel, ktory nie je chybou (nalez prveho behu na kode v0.4).
+        # Hodnota je vidiet v riadku HTTP vyssie; presne ju overuje
+        # test_http_confirm_of_a_request_returns_its_decision_deadline.
         f"{response.status_code} {body.get('state', body.get('code'))} "
-        f"decision_deadline={body.get('decision_deadline')}",
+        f"decision_deadline="
+        f"{'uvedeny' if body.get('decision_deadline') is not None else 'chyba'}",
         response.status_code == 200 and body.get("state") == "PENDING_APPROVAL"
         and body.get("decision_deadline") is not None,
     )
