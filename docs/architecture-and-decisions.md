@@ -1578,7 +1578,7 @@ do v0.4, pretože v0.3 uzatvára nález `F-03` (dôvod je v `ADR-02`, časť
 
 ## ADR-02 — Migrácie schémy pred zmenou v C09
 
-**Stav:** prijaté 2026-11-15. Uzatvára riziko `R-04` a akciu `P4` z C07.
+**Stav:** prijaté 2026-11-15. Rozhoduje riziko `R-04` a uzatvára akciu `P4` z C07. Samotné riziko ostáva otvorené, kým kontrola schémy pri štarte nie je implementovaná (pozri `R-04` v registri).
 
 ### Kontext
 
@@ -1622,10 +1622,10 @@ odmietne naštartovať s vetou, čo treba spraviť. Postup prestavby je v README
 
 | Kritérium | A — migrácie | B — rýchle zlyhanie + prestavba |
 | --------- | ------------ | ------------------------------- |
-| Rieši dnešný problém (tichý rozchod → `500`) | Áno, ak sa migrácia spustí. Keď ju niekto zabudne, zlyhanie je rovnako neskoré ako dnes. | **Áno vždy** — aplikácia s nesediacou schémou nenaštartuje. |
+| Rieši dnešný problém (tichý rozchod → `500`) | Áno, ak sa migrácia spustí. Keď ju niekto zabudne, zlyhanie je rovnako neskoré ako dnes — iba ak by aj A dostala kontrolu pri štarte (aktuálna revízia proti poslednej). Kontrola pri štarte je teda nezávislá od voľby A/B; rozhoduje riadok o dátach nižšie. | **Áno vždy** — aplikácia s nesediacou schémou nenaštartuje. |
 | Zachová dáta pri zmene schémy | Áno. | Nie — prestavba ich zmaže. |
 | **Sú nejaké dáta, o ktoré ide?** | — | **Nie.** Bez volume neprežijú ani reštart kontajnera. Výhoda A je dnes teoretická. |
-| `AC-09` (žiadosť spred zmeny) | Prirodzene: migrácia doplní lehotu starým riadkom. | Rovnako overiteľné: stĺpec je nullable, riadok s `NULL` je presne „žiadosť spred zmeny". |
+| `AC-09` (žiadosť spred zmeny) | Prirodzene: migrácia doplní lehotu starým riadkom (= `starts_at`). | Žiadosti spred zmeny prestavbu neprežijú, takže `AC-09` sa pri B v praxi neuplatní — overí sa iba ako pravidlo: žiadosť s lehotou = `starts_at` sa správa ako vo v0.2. **`NULL` nie je platná lehota žiadosti:** obmedzenie z `CA-6` (potvrdené v PR #11) ostáva a chráni aj priamy SQL zápis. Bez neho by sa rozišli obe formy živosti — v SQL je `NULL > now` neznáme, teda „neblokuje". |
 | Rollback `CR-08` (`UPDATE`, potom starý kód) | Skriptovateľný ako `downgrade`. | Ručný postup zapísaný v release zázname; vyskúšať ho treba tak či tak. |
 | Cena | Závislosť, prostredie, revízia ku každej zmene schémy, nový test. | Jedna kontrola pri štarte, jedna sekcia v README. |
 | Riziko, ktoré pridáva | Rozídená história revízií a databáza, ktorú žiadna revízia nepopisuje. | Zmazanie dát pri prestavbe — dnes bez dôsledku, pri prvom volume vážne. |
@@ -1636,7 +1636,10 @@ odmietne naštartovať s vetou, čo treba spraviť. Postup prestavby je v README
 
 1. aplikácia pri štarte porovná schému s modelmi a pri rozchode **odmietne
    naštartovať** s vetou, ktorá povie, čo spraviť (nahrádza `500` pri každej
-   požiadavke),
+   požiadavke). Porovnáva tabuľky, stĺpce (typ a nullability), hodnoty enumov
+   a pomenované obmedzenia — vrátane obmedzenia z `CA-6`. Kontrola iba nad
+   stĺpcami by pustila databázu bez neho alebo so starým enumom (zmena v0.2
+   pridávala hodnoty do `reservation_state`),
 2. postup prestavby databázy je v README ako súčasť `CR-08`,
 3. postup rollbacku `CR-08` ostáva ručný a zapísaný v release zázname.
 
@@ -1675,5 +1678,7 @@ zmeny a `R-03` ostáva otvorené dovtedy, kým sa nedopíše celý `CR-08`.
 
 - **Prijaté:** prestavba databázy zmaže dáta. Dnes bez dôsledku, po spúšťači nie.
 - **Pre C09:** kontrola schémy pri štarte je súčasťou delty `CR-08` — pribúda
-  k riadku *`create_all()` pri štarte* v analýze dopadu.
+  k riadku *`create_all()` pri štarte* v analýze dopadu, spolu s testom:
+  štart nad starou schémou (bez stĺpca s lehotou, bez obmedzenia `CA-6`)
+  odmietne naštartovať s vetou, čo spraviť.
 - **`P4` z C07** (*Rozhodnúť o migráciách schémy pre CP2*) je týmto uzavretá.

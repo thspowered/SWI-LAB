@@ -13,7 +13,7 @@ a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
 
 **Stav:** baseline v0.3 — schválená tímom 2026-11-15 (časť 11).
 v0.3 je **oprava znenia, nie zmena správania**: zužuje `REQ-16` na to, čo
-`OP-04` a implementácia robia od v0.2. Tým sa uzatvára nález F-03 z C06.
+`OP-04` a implementácia robia od C03 (ADR-01). Tým sa uzatvára nález F-03 z C06.
 Nová požiadavka `CR-08` (lehota na rozhodnutie o žiadosti) ide do v0.4 —
 pozri [intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08).
 
@@ -23,7 +23,7 @@ pozri [intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08).
 | ------ | ----- |
 | v0.1 | Štyri základné operácie, pravidlá BR-01..BR-06, požiadavky REQ-01..REQ-09. Schválená tímom. |
 | v0.2 | Schvaľovací proces: nová operácia OP-05, stavy `PENDING_APPROVAL`, `REJECTED`, `EXPIRED`, pravidlá BR-07 a BR-08, požiadavky REQ-10..REQ-16. |
-| v0.3 | Oprava `REQ-16`: zúžené na záruku, ktorú `OP-04` a implementácia skutočne dávajú. Žiadna zmena správania, kódu ani testov — nález F-03 z nezávislého review v C06. |
+| v0.3 | Oprava `REQ-16`: zúžené na záruku, ktorú `OP-04` a implementácia skutočne dávajú. Žiadna zmena správania ani kódu; v testoch iba text jedného docstringu — nález F-03 z nezávislého review v C06. |
 
 Čo presne zmena zasiahla a čo výslovne nie, je v
 [docs/change-impact-c02.md](change-impact-c02.md). Analýza dopadu vznikla
@@ -533,7 +533,7 @@ implementácia spĺňajúca `OP-04` dokáže splniť: keď potvrdenie vyhrá a d
 začiatku zostáva viac než 60 minút (BR-03), následné zrušenie `CONFIRMED`
 rezervácie **oprávnene uspeje** — uspejú teda obe. Záruka, na ktorej
 požiadavke záleží, je tretia veta; prvá a tretia platia aj po zmene.
-Správanie, kód ani testy sa nemenia (`test_concurrent_cancel_and_confirm_on_same_reservation`,
+Správanie ani kód sa nemenia, testy iba v texte (`test_concurrent_cancel_and_confirm_on_same_reservation`,
 `test_at_most_one_operation_leaves_the_source_state`).
 
 > **REQ-06:** Rezerváciu, ktorej začiatok už nastal, nemožno potvrdiť.
@@ -1092,7 +1092,7 @@ nespĺňa — je to druhý architektonický driver pre C03.
 | **Rozpor** | `REQ-16` v0.2 tvrdila, že pri súbehu zrušenia s potvrdením „uspeje najviac jedno z nich". OP-04 však pri víťaznom potvrdení posúdi následné zrušenie podľa **nového** stavu — a ďaleko pred začiatkom (viac než 60 min, BR-03) oprávnene uspeje. Obe operácie teda uspejú. |
 | **Ktoré znenie bolo chybné** | `REQ-16`. OP-04 popisuje správanie, ktoré tím prijal a ktoré je správne: zrušiť potvrdenú rezerváciu deň vopred musí ísť bez ohľadu na to, ako sa do stavu `CONFIRMED` dostala. |
 | **Oprava** | Druhá veta `REQ-16` zúžená: druhá operácia v poradí sa posúdi podľa už zmeneného zdrojového stavu a **podľa neho** buď uspeje, alebo je zamietnutá. Prvá veta (stav sa opustí najviac raz) a tretia (zrušenie nikdy nevráti úspech nad blokujúcou rezerváciou) ostávajú doslova. |
-| **Dopad na správanie** | **Žiadny.** Implementácia aj testy toto čítanie dodržiavali od v0.2 — pokrývajú ho `test_concurrent_cancel_and_confirm_on_same_reservation` a `test_at_most_one_operation_leaves_the_source_state`. Sada po zmene: `253 passed`, bez úpravy jediného testu. |
+| **Dopad na správanie** | **Žiadny.** Implementácia aj testy toto čítanie dodržiavajú od C03 (ADR-01, zámok nad riadkom rezervácie, PR #7) — pokrývajú ho `test_concurrent_cancel_and_confirm_on_same_reservation` a `test_at_most_one_operation_leaves_the_source_state`. Pri samotnej v0.2 (aplikácia z C02) neplatilo ani zúžené znenie: súbežné zrušenie a potvrdenie obe uspeli a rezervácia pritom blokovala (nález N-07, test `xfail`). Sada po zmene: `253 passed`; v testoch sa zmenil iba docstring a hlásenie druhého testu, ktoré citovali odstránenú vetu. |
 | **Dopad na ostatné časti** | `REQ-05` sa netýka — hovorí o dvoch rezerváciách jedného prístroja, nie o dvoch operáciách nad jednou rezerváciou. `BR-03` a OP-04 sa nemenia. Príklad overenia pri OP-03 a riadok `REQ-16` v časti 10 prepísané na nové znenie. |
 | **Čo to nerieši** | Nič nové nepribudlo. `REQ-16` naďalej negarantuje poradie dvoch súbežných operácií — to je vlastnosť súbehu, nie medzera v požiadavke. |
 
@@ -1196,7 +1196,7 @@ nezávislou revíziou* (RV-1 až RV-6). Pôvodne mali obe sady štítok `R-x`,
 | Tomáš Krišica | reprodukcia nálezu, návrh nového znenia, prepis špecifikácie             | ✅ 2026-11-15  |
 | Tomáš Hrubý   | review pred integráciou ([PR #12](https://github.com/thspowered/SWI-LAB/pull/12)) | ✅ 2026-11-15  |
 
-v0.3 je **oprava znenia**: správanie, kód ani testy sa nemenia a sada ostáva
+v0.3 je **oprava znenia**: správanie ani kód sa nemenia, v testoch iba text jedného docstringu, a sada ostáva
 `253 passed`. Preto k nej nie je samostatná analýza dopadu ako pri v0.2 —
 dopad je rozobratý v kontrole konzistencie na konci časti 9 a vo vyhodnotení
 nálezu F-03 v [docs/evidence-and-evolution.md](evidence-and-evolution.md).
