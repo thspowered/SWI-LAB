@@ -1359,11 +1359,11 @@ Expected je prepísané v `scripts/c08_baseline_tc.py`, ktorý test cases vykon�
 
 | # | Akcia / vstup | Expected PRED behom | Actual PO behu | Dôkaz |
 | - | ------------- | ------------------- | -------------- | ----- |
-| 1 | reset + vložiť `R1`, `B1`, `B2` | presne jedna `CONFIRMED` (`B1`); `B2` čaká (`PENDING_APPROVAL`) | *doplní sa po behu* | |
-| 2 | nezávisle prečítať uložené intervaly a stavy (SQL) | `B1 [10:00, 11:00)`, `B2 [11:00, 12:00)`; žiadna blokujúca dvojica v prekryve | | |
-| 3 | `POST /reservations/{B2}/approve`, `requested_by = V1` | `200`, `state = CONFIRMED` — podmienky REQ-11 sú splnené, susedný interval nekoliduje | | |
-| 4 | znova načítať commitnutý stav novým spojením | `B1` aj `B2` `CONFIRMED`; žiadna blokujúca dvojica v prekryve | | |
-| 5 | reset a celé zopakovať | ten istý výsledok — test sa dá opakovať bez zmeny vstupov | | |
+| 1 | reset + vložiť `R1`, `B1`, `B2` | presne jedna `CONFIRMED` (`B1`); `B2` čaká (`PENDING_APPROVAL`) | `{B1: CONFIRMED, B2: PENDING_APPROVAL}` | výpis r. 11–13 |
+| 2 | nezávisle prečítať uložené intervaly a stavy (SQL) | `B1 [10:00, 11:00)`, `B2 [11:00, 12:00)`; žiadna blokujúca dvojica v prekryve | `B1 [10:00, 11:00)`, `B2 [11:00, 12:00)`; blokujúce prekryvy `[]` | r. 14–16 |
+| 3 | `POST /reservations/{B2}/approve`, `requested_by = V1` | `200`, `state = CONFIRMED` — podmienky REQ-11 sú splnené, susedný interval nekoliduje | `200`, `state = CONFIRMED` | r. 17–21 |
+| 4 | znova načítať commitnutý stav novým spojením | `B1` aj `B2` `CONFIRMED`; žiadna blokujúca dvojica v prekryve | `B1 CONFIRMED`, `B2 CONFIRMED`; blokujúce prekryvy `[]` | r. 22–24 |
+| 5 | reset a celé zopakovať | ten istý výsledok — test sa dá opakovať bez zmeny vstupov | beh 2 po resete: kroky 1–4 doslova rovnaké | r. 27–43 |
 
 **Final postcondition / oracle:** v databáze sú dve `CONFIRMED` rezervácie `R1`
 a dotaz na blokujúce prekryvy vráti prázdny výsledok.
@@ -1381,11 +1381,11 @@ samostatný test súbehu (`test_concurrent_approvals_of_colliding_requests`).
 
 | # | Akcia / vstup | Expected PRED behom | Actual PO behu | Dôkaz |
 | - | ------------- | ------------------- | -------------- | ----- |
-| 1 | reset + vložiť `R1`, `B1`, `B2` | iba `B1` je `CONFIRMED`; `B2` `DRAFT` | *doplní sa po behu* | |
-| 2 | nezávisle prečítať východiskový stav (SQL) | prekryv v čase `B1`–`B2` existuje, blokujúca dvojica nie (druhé potvrdenie neexistuje) | | |
-| 3 | `POST /reservations/{B2}/confirm`, `requested_by = S1` | zamietnuté: `409`, `code = OVERLAP` | | |
-| 4 | prečítať uložený stav po rollbacku novým spojením | `B1` bez zmeny (celý riadok), `B2` zostáva `DRAFT`; žiadna blokujúca dvojica v prekryve | | |
-| 5 | reset a celé zopakovať | ten istý výsledok | | |
+| 1 | reset + vložiť `R1`, `B1`, `B2` | iba `B1` je `CONFIRMED`; `B2` `DRAFT` | `{B1: CONFIRMED, B2: DRAFT}` | výpis r. 46–48 |
+| 2 | nezávisle prečítať východiskový stav (SQL) | prekryv v čase `B1`–`B2` existuje, blokujúca dvojica nie (druhé potvrdenie neexistuje) | prekryv v čase `[(B1, B2)]`; blokujúce prekryvy `[]` | r. 49–51 |
+| 3 | `POST /reservations/{B2}/confirm`, `requested_by = S1` | zamietnuté: `409`, `code = OVERLAP` | `409 {"code": "OVERLAP"}` | r. 52–56 |
+| 4 | prečítať uložený stav po rollbacku novým spojením | `B1` bez zmeny (celý riadok), `B2` zostáva `DRAFT`; žiadna blokujúca dvojica v prekryve | `B1 CONFIRMED`, riadok bez zmeny `True`; `B2 DRAFT`; blokujúce prekryvy `[]` | r. 57–59 |
+| 5 | reset a celé zopakovať | ten istý výsledok | beh 2 po resete: kroky 1–4 doslova rovnaké | r. 62–78 |
 
 **Final postcondition / oracle:** riadok `B1` je bajtovo rovnaký ako pred
 operáciou, `B2` je `DRAFT`, dotaz na blokujúce prekryvy je prázdny.
@@ -1401,13 +1401,13 @@ operáciou, `B2` je `DRAFT`, dotaz na blokujúce prekryvy je prázdny.
 
 | # | Akcia / vstup | Expected PRED behom | Actual PO behu | Dôkaz |
 | - | ------------- | ------------------- | -------------- | ----- |
-| 1 | reset + vložiť `R1`, `B1`, `B2` | `B1` `PENDING_APPROVAL`, `B2` `DRAFT` | *doplní sa po behu* | |
-| 2 | prečítať stĺpce `reservations` (`information_schema`) | iba `id, instrument_id, user_id, starts_at, ends_at, state, created_at` — okamih podania sa neukladá | | |
-| 3 | `GET /instruments/{R1}/availability?starts_at=D 10:00&ends_at=D 11:00` | `200`, `UNAVAILABLE`, `reason = PENDING_APPROVAL`, kolízia `[B1]` | | |
-| 4 | `POST /reservations/{B2}/confirm`, `requested_by = S2` | zamietnuté: `409 OVERLAP` — živá žiadosť blokuje | | |
-| 5 | `POST /reservations/{B1}/approve`, `requested_by = V1` | `200`, `CONFIRMED` — lehota na rozhodnutie neexistuje | | |
-| 6 | prečítať uložený stav novým spojením | `B1` `CONFIRMED`, `B2` `DRAFT` | | |
-| 7 | reset a celé zopakovať | ten istý výsledok | | |
+| 1 | reset + vložiť `R1`, `B1`, `B2` | `B1` `PENDING_APPROVAL`, `B2` `DRAFT` | `{B1: PENDING_APPROVAL, B2: DRAFT}` | výpis r. 81–83 |
+| 2 | prečítať stĺpce `reservations` (`information_schema`) | iba `id, instrument_id, user_id, starts_at, ends_at, state, created_at` — okamih podania sa neukladá | `[id, instrument_id, user_id, starts_at, ends_at, state, created_at]` | r. 84–86 |
+| 3 | `GET /instruments/{R1}/availability?starts_at=D 10:00&ends_at=D 11:00` | `200`, `UNAVAILABLE`, `reason = PENDING_APPROVAL`, kolízia `[B1]` | `200`, `UNAVAILABLE`, `PENDING_APPROVAL`, `[B1]` | r. 87–91 |
+| 4 | `POST /reservations/{B2}/confirm`, `requested_by = S2` | zamietnuté: `409 OVERLAP` — živá žiadosť blokuje | `409 OVERLAP` | r. 92–96 |
+| 5 | `POST /reservations/{B1}/approve`, `requested_by = V1` | `200`, `CONFIRMED` — lehota na rozhodnutie neexistuje | `200`, `CONFIRMED` | r. 97–101 |
+| 6 | prečítať uložený stav novým spojením | `B1` `CONFIRMED`, `B2` `DRAFT` | `B1 CONFIRMED`, `B2 DRAFT` | r. 102–104 |
+| 7 | reset a celé zopakovať | ten istý výsledok | beh 2 po resete: kroky 1–6 doslova rovnaké | r. 107–133 |
 
 **Final postcondition / oracle:** `B1` `CONFIRMED`, `B2` `DRAFT`.
 **Čo test znamená:** `PASS` tu **nie je** dobrá správa o systéme — potvrdzuje,
@@ -1418,6 +1418,206 @@ viac než 48 h nebude blokovať (`AVAILABLE`), `B2` prejde do
 oracle novej požiadavky.
 **Čo nie je pokryté:** hranica 48:00:00 — na baseline neexistuje, overí ju
 až C09 (AC-04).
+
+### Krok 2 — vykonanie a výsledky (Actual)
+
+| Položka | Hodnota |
+| ------- | ------- |
+| **Kedy a nad čím** | 2026-11-15 10:55:54 UTC, `HEAD` = `f36e126`, kód aplikácie = `b0974e7` (skript to overuje cez `git diff` nad `src`, `pyproject.toml`, `docker-compose.yml`) |
+| **Prostredie** | `uvicorn swilab.main:app --port 8000` (PYTHONPATH=src), PostgreSQL 16.15 z `docker-compose.yml`, odtlačok schémy `1f96b2bbf6bf8c47` |
+| **Príkaz** | `.venv/bin/python scripts/c08_baseline_tc.py` → návratový kód `0` |
+| **Deň testu D** | 2026-11-22 (UTC) |
+
+| Test case | Verdikt | Pozorovaný základ |
+| --------- | ------- | ----------------- |
+| `TC-C08-01` | **PASS** | Schválenie susednej žiadosti vrátilo `200 CONFIRMED`; databáza po commite: dve `CONFIRMED`, žiadna blokujúca dvojica v prekryve. Dva behy po resete doslova rovnaké. |
+| `TC-C08-02` | **PASS** | Potvrdenie prekrývajúcej sa rezervácie vrátilo `409 OVERLAP`; riadok `B1` sa nezmenil, `B2` zostal `DRAFT`, blokujúca dvojica nevznikla. Dva behy rovnaké. |
+| `TC-C08-03` | **PASS** | Žiadosť, ktorej `DRAFT` vznikol pred 10 dňami, blokuje (`UNAVAILABLE`, `PENDING_APPROVAL`, `409 OVERLAP` pre iného) a vedúci ju schváli (`200 CONFIRMED`). Okamih podania v tabuľke nie je. **Obmedzenie, ktoré CR-08 rieši, je doložené.** |
+
+*If FAIL:* žiadny. *If BLOCKED:* žiadny.
+
+**Poradie návrhu a behu.** Expected je v `bbfbcfe` (10:55:15 UTC). Prvý beh
+prebehol na `bbfbcfe` o 10:55:25 UTC s rovnakými verdiktmi, ale výpis
+neukazoval query parametre `GET` požiadavky — z logu by nebolo vidieť presný
+request. Skript dostal úpravu **iba výpisu** (`f36e126`: query parametre a
+príznak necommitnutých zmien; Expected ani kroky sa nemenili) a záznam nižšie
+je beh na čistom `f36e126`.
+
+**Kontrola, že oracle nie je prázdny.** Zelený výsledok má cenu, len ak by
+chyba skončila červeno. Rovnaký skript sme preto pustili ešte dvakrát:
+
+| Kontrolný beh | Očakávanie | Výsledok |
+| ------------- | ---------- | -------- |
+| aplikácia s vloženou chybou — v kópii `src/` v `enter_blocking_state()` `if conflicts:` → `if False:` (BR-02 sa nevyhodnocuje), port 8001 | `TC-C08-02` a `TC-C08-03` musia padnúť, `TC-C08-01` nie (susedné intervaly sa neprekrývajú) | `TC-C08-01 PASS`, `TC-C08-02 FAIL`, `TC-C08-03 FAIL`, návratový kód `1`. V `TC-C08-02` vrátilo potvrdenie `200 PENDING_APPROVAL` a **nezávislý SQL dotaz našiel blokujúcu dvojicu `[(B1, B2)]`** — porušenie BR-02 odhalila perzistencia, nie odpoveď API. |
+| aplikácia nebeží (port 8009) | `BLOCKED`, nie `FAIL` ani `PASS` | `BLOCKED - infrastruktura nebezi: [Errno 61] Connection refused`, ďalší krok vypísaný, návratový kód `2` |
+
+Pri behu s vloženou chybou hlavička hlási `kod aplikacie: = b0974e7`, lebo
+porovnáva repozitár, nie kópiu, ktorú server spustil — kontrolný beh to
+neuvádza ako vlastnosť skriptu, iba ako jeho hranicu.
+
+**Limity tohto overenia** (čo beh **nedokazuje**):
+
+- **Čas sa posunúť nedá.** API číta skutočné hodiny servera, takže hranice
+  v čase (BR-08 v `starts_at`, budúca hranica 48 h) sa cez HTTP overiť nedajú
+  bez čakania. Overujú ich testy služby, ktoré dostávajú `now` ako parameter
+  (`test_expiry_boundary`, `test_liveness_in_the_overlap_query_agrees_with_the_policy`).
+- **Súbeh** tu nie je — beží jedna požiadavka za druhou. Pokrývajú ho testy
+  súbehu nižšie.
+- **`TC-C08-03` používa `created_at` ako náhradu** okamihu podania, ktorý
+  baseline nepozná. Pre test to stačí: dokazuje práve to, že systém vek
+  žiadosti nevie posúdiť.
+- **Jeden stroj, jedna inštancia aplikácie** (G4), bez CI.
+- Dáta sa vkladajú priamo do databázy, nie cez OP-01 a OP-03 — rovnako ako
+  fixtures testov. Vytvorenie cez HTTP overuje `test_http_create_reservation`,
+  prechod `DRAFT → PENDING_APPROVAL` cez HTTP
+  `test_http_confirm_on_guarded_instrument_returns_pending` (oba cez
+  `TestClient`, nie cez bežiaci server).
+
+<details>
+<summary>Úplný výpis behu na <code>f36e126</code> (čísla riadkov, na ktoré odkazujú tabuľky TC)</summary>
+
+```text
+  1  cas behu (UTC):   2026-11-15T10:55:54Z
+  2  HEAD:             f36e126
+  3  kod aplikacie:    = b0974e7
+  4  databaza:         postgresql://swilab:***@localhost:5433/swilab
+  5  aplikacia:        http://127.0.0.1:8000
+  6  den testu (UTC):  2026-11-22
+  7  PostgreSQL:       16.15 (Debian 16.15-1.pgdg13+2)
+  8  odtlacok schemy:  1f96b2bbf6bf8c47
+  9  
+ 10  === TC-C08-01 - beh 1 ===
+ 11    [OK  ] krok 1: reset + R1, B1, B2
+ 12           expected: presne jedna CONFIRMED (B1); B2 PENDING_APPROVAL
+ 13           actual:   {'B1': 'CONFIRMED', 'B2': 'PENDING_APPROVAL'}
+ 14    [OK  ] krok 2: nezavisle precitat intervaly a stavy (SQL)
+ 15           expected: B1 [10:00, 11:00), B2 [11:00, 12:00); ziadna blokujuca dvojica v prekryve
+ 16           actual:   {'intervaly': {'B1': '[10:00, 11:00)', 'B2': '[11:00, 12:00)'}, 'blokujuce_prekryvy': []}
+ 17        HTTP POST /reservations/B2/approve  {"requested_by": "V1"}
+ 18        -> 200 {"id": "B2", "instrument_id": "R1", "user_id": "S1", "starts_at": "2026-11-22T11:00:00Z", "ends_at": "2026-11-22T12:00:00Z", "state": "CONFIRMED"}
+ 19    [OK  ] krok 3: POST approve(B2), schvaluje V1 (SUPERVISOR, nie vlastnik)
+ 20           expected: 200, state CONFIRMED (REQ-11; susedny interval nekoliduje, BR-01)
+ 21           actual:   200 CONFIRMED
+ 22    [OK  ] krok 4: znovu nacitat commitnuty stav z databazy (nove spojenie)
+ 23           expected: B1 CONFIRMED, B2 CONFIRMED; ziadna blokujuca dvojica v prekryve (BR-02)
+ 24           actual:   {'stavy': {'B1': 'CONFIRMED', 'B2': 'CONFIRMED'}, 'blokujuce_prekryvy': []}
+ 25    verdikt behu 1: PASS
+ 26  
+ 27  === TC-C08-01 - beh 2 ===
+ 28    [OK  ] krok 1: reset + R1, B1, B2
+ 29           expected: presne jedna CONFIRMED (B1); B2 PENDING_APPROVAL
+ 30           actual:   {'B1': 'CONFIRMED', 'B2': 'PENDING_APPROVAL'}
+ 31    [OK  ] krok 2: nezavisle precitat intervaly a stavy (SQL)
+ 32           expected: B1 [10:00, 11:00), B2 [11:00, 12:00); ziadna blokujuca dvojica v prekryve
+ 33           actual:   {'intervaly': {'B1': '[10:00, 11:00)', 'B2': '[11:00, 12:00)'}, 'blokujuce_prekryvy': []}
+ 34        HTTP POST /reservations/B2/approve  {"requested_by": "V1"}
+ 35        -> 200 {"id": "B2", "instrument_id": "R1", "user_id": "S1", "starts_at": "2026-11-22T11:00:00Z", "ends_at": "2026-11-22T12:00:00Z", "state": "CONFIRMED"}
+ 36    [OK  ] krok 3: POST approve(B2), schvaluje V1 (SUPERVISOR, nie vlastnik)
+ 37           expected: 200, state CONFIRMED (REQ-11; susedny interval nekoliduje, BR-01)
+ 38           actual:   200 CONFIRMED
+ 39    [OK  ] krok 4: znovu nacitat commitnuty stav z databazy (nove spojenie)
+ 40           expected: B1 CONFIRMED, B2 CONFIRMED; ziadna blokujuca dvojica v prekryve (BR-02)
+ 41           actual:   {'stavy': {'B1': 'CONFIRMED', 'B2': 'CONFIRMED'}, 'blokujuce_prekryvy': []}
+ 42    verdikt behu 2: PASS
+ 43    opakovanie po resete dalo ROVNAKY vysledok
+ 44  
+ 45  === TC-C08-02 - beh 1 ===
+ 46    [OK  ] krok 1: reset + R1, B1, B2
+ 47           expected: iba B1 je CONFIRMED; B2 DRAFT
+ 48           actual:   {'B1': 'CONFIRMED', 'B2': 'DRAFT'}
+ 49    [OK  ] krok 2: nezavisle precitat vychodiskovy stav (SQL)
+ 50           expected: prekryv v case B1-B2 existuje, blokujuca dvojica nie
+ 51           actual:   {'prekryvy_v_case': [('B1', 'B2')], 'blokujuce_prekryvy': []}
+ 52        HTTP POST /reservations/B2/confirm  {"requested_by": "S1"}
+ 53        -> 409 {"code": "OVERLAP", "message": "interval koliduje s inou rezervaciou toho isteho pristroja v blokujucom stave"}
+ 54    [OK  ] krok 3: POST confirm(B2), potvrdzuje vlastnik S1
+ 55           expected: zamietnute: 409, code OVERLAP (REQ-04, BR-02)
+ 56           actual:   409 OVERLAP
+ 57    [OK  ] krok 4: precitat ulozeny stav po rollbacku (nove spojenie)
+ 58           expected: B1 bez zmeny (cely riadok), B2 DRAFT; ziadna blokujuca dvojica v prekryve
+ 59           actual:   {'stavy': {'B1': 'CONFIRMED', 'B2': 'DRAFT'}, 'B1_bez_zmeny': True, 'blokujuce_prekryvy': []}
+ 60    verdikt behu 1: PASS
+ 61  
+ 62  === TC-C08-02 - beh 2 ===
+ 63    [OK  ] krok 1: reset + R1, B1, B2
+ 64           expected: iba B1 je CONFIRMED; B2 DRAFT
+ 65           actual:   {'B1': 'CONFIRMED', 'B2': 'DRAFT'}
+ 66    [OK  ] krok 2: nezavisle precitat vychodiskovy stav (SQL)
+ 67           expected: prekryv v case B1-B2 existuje, blokujuca dvojica nie
+ 68           actual:   {'prekryvy_v_case': [('B1', 'B2')], 'blokujuce_prekryvy': []}
+ 69        HTTP POST /reservations/B2/confirm  {"requested_by": "S1"}
+ 70        -> 409 {"code": "OVERLAP", "message": "interval koliduje s inou rezervaciou toho isteho pristroja v blokujucom stave"}
+ 71    [OK  ] krok 3: POST confirm(B2), potvrdzuje vlastnik S1
+ 72           expected: zamietnute: 409, code OVERLAP (REQ-04, BR-02)
+ 73           actual:   409 OVERLAP
+ 74    [OK  ] krok 4: precitat ulozeny stav po rollbacku (nove spojenie)
+ 75           expected: B1 bez zmeny (cely riadok), B2 DRAFT; ziadna blokujuca dvojica v prekryve
+ 76           actual:   {'stavy': {'B1': 'CONFIRMED', 'B2': 'DRAFT'}, 'B1_bez_zmeny': True, 'blokujuce_prekryvy': []}
+ 77    verdikt behu 2: PASS
+ 78    opakovanie po resete dalo ROVNAKY vysledok
+ 79  
+ 80  === TC-C08-03 - beh 1 ===
+ 81    [OK  ] krok 1: reset + R1, B1 (ziadost, DRAFT vznikol pred 10 dnami), B2
+ 82           expected: B1 PENDING_APPROVAL, B2 DRAFT
+ 83           actual:   {'B1': 'PENDING_APPROVAL', 'B2': 'DRAFT'}
+ 84    [OK  ] krok 2: precitat stlpce tabulky reservations (information_schema)
+ 85           expected: iba id, instrument_id, user_id, starts_at, ends_at, state, created_at - okamih podania ziadosti sa neuklada
+ 86           actual:   ['id', 'instrument_id', 'user_id', 'starts_at', 'ends_at', 'state', 'created_at']
+ 87        HTTP GET /instruments/R1/availability?starts_at=2026-11-22T10:00:00+00:00&ends_at=2026-11-22T11:00:00+00:00
+ 88        -> 200 {"instrument_id": "R1", "starts_at": "2026-11-22T10:00:00Z", "ends_at": "2026-11-22T11:00:00Z", "status": "UNAVAILABLE", "reason": "PENDING_APPROVAL", "conflicting_reservation_ids": ["B1"]}
+ 89    [OK  ] krok 3: GET availability R1 [10:00, 11:00)
+ 90           expected: 200, UNAVAILABLE, reason PENDING_APPROVAL, kolizia [B1] (REQ-03, REQ-13)
+ 91           actual:   200 UNAVAILABLE PENDING_APPROVAL ['B1']
+ 92        HTTP POST /reservations/B2/confirm  {"requested_by": "S2"}
+ 93        -> 409 {"code": "OVERLAP", "message": "interval koliduje s inou rezervaciou toho isteho pristroja v blokujucom stave"}
+ 94    [OK  ] krok 4: POST confirm(B2), potvrdzuje vlastnik S2
+ 95           expected: zamietnute: 409 OVERLAP - ziva ziadost blokuje (REQ-04, BR-08 v0.2)
+ 96           actual:   409 OVERLAP
+ 97        HTTP POST /reservations/B1/approve  {"requested_by": "V1"}
+ 98        -> 200 {"id": "B1", "instrument_id": "R1", "user_id": "S1", "starts_at": "2026-11-22T10:00:00Z", "ends_at": "2026-11-22T11:00:00Z", "state": "CONFIRMED"}
+ 99    [OK  ] krok 5: POST approve(B1), schvaluje V1
+100           expected: 200, state CONFIRMED - ziadna lehota na rozhodnutie neexistuje (REQ-11)
+101           actual:   200 CONFIRMED
+102    [OK  ] krok 6: precitat ulozeny stav (nove spojenie)
+103           expected: B1 CONFIRMED, B2 DRAFT
+104           actual:   {'B1': 'CONFIRMED', 'B2': 'DRAFT'}
+105    verdikt behu 1: PASS
+106  
+107  === TC-C08-03 - beh 2 ===
+108    [OK  ] krok 1: reset + R1, B1 (ziadost, DRAFT vznikol pred 10 dnami), B2
+109           expected: B1 PENDING_APPROVAL, B2 DRAFT
+110           actual:   {'B1': 'PENDING_APPROVAL', 'B2': 'DRAFT'}
+111    [OK  ] krok 2: precitat stlpce tabulky reservations (information_schema)
+112           expected: iba id, instrument_id, user_id, starts_at, ends_at, state, created_at - okamih podania ziadosti sa neuklada
+113           actual:   ['id', 'instrument_id', 'user_id', 'starts_at', 'ends_at', 'state', 'created_at']
+114        HTTP GET /instruments/R1/availability?starts_at=2026-11-22T10:00:00+00:00&ends_at=2026-11-22T11:00:00+00:00
+115        -> 200 {"instrument_id": "R1", "starts_at": "2026-11-22T10:00:00Z", "ends_at": "2026-11-22T11:00:00Z", "status": "UNAVAILABLE", "reason": "PENDING_APPROVAL", "conflicting_reservation_ids": ["B1"]}
+116    [OK  ] krok 3: GET availability R1 [10:00, 11:00)
+117           expected: 200, UNAVAILABLE, reason PENDING_APPROVAL, kolizia [B1] (REQ-03, REQ-13)
+118           actual:   200 UNAVAILABLE PENDING_APPROVAL ['B1']
+119        HTTP POST /reservations/B2/confirm  {"requested_by": "S2"}
+120        -> 409 {"code": "OVERLAP", "message": "interval koliduje s inou rezervaciou toho isteho pristroja v blokujucom stave"}
+121    [OK  ] krok 4: POST confirm(B2), potvrdzuje vlastnik S2
+122           expected: zamietnute: 409 OVERLAP - ziva ziadost blokuje (REQ-04, BR-08 v0.2)
+123           actual:   409 OVERLAP
+124        HTTP POST /reservations/B1/approve  {"requested_by": "V1"}
+125        -> 200 {"id": "B1", "instrument_id": "R1", "user_id": "S1", "starts_at": "2026-11-22T10:00:00Z", "ends_at": "2026-11-22T11:00:00Z", "state": "CONFIRMED"}
+126    [OK  ] krok 5: POST approve(B1), schvaluje V1
+127           expected: 200, state CONFIRMED - ziadna lehota na rozhodnutie neexistuje (REQ-11)
+128           actual:   200 CONFIRMED
+129    [OK  ] krok 6: precitat ulozeny stav (nove spojenie)
+130           expected: B1 CONFIRMED, B2 DRAFT
+131           actual:   {'B1': 'CONFIRMED', 'B2': 'DRAFT'}
+132    verdikt behu 2: PASS
+133    opakovanie po resete dalo ROVNAKY vysledok
+134  
+135  === suhrn ===
+136  TC-C08-01: PASS
+137  TC-C08-02: PASS
+138  TC-C08-03: PASS
+```
+
+</details>
 
 #### Súbeh
 
