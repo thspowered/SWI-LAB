@@ -1,0 +1,66 @@
+# C09, krok 4: build, testy a integracna kontrola pri kazdom push a PR.
+#
+# Celu kontrolu robi scripts/ci_check.sh - ten isty skript, aky spusta
+# clovek lokalne. Tento subor iba pripravi prostredie: Python 3.12,
+# zavislosti z requirements-dev.lock a PostgreSQL 16 ako skutocnu databazu,
+# nie mock. Zelena znamena, ze presli kroky skriptu - nic viac.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: testy, integracia, artefakt
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      # Ten isty obraz a port ako docker-compose.yml, aby DATABASE_URL
+      # bola rovnaka v CI aj lokalne. Heslo je heslo vyvojoveho kontajnera
+      # z docker-compose.yml, nie tajomstvo.
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: swilab
+          POSTGRES_PASSWORD: swilab
+          POSTGRES_DB: swilab
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U swilab -d swilab"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+psycopg://swilab:swilab@localhost:5433/swilab
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      - name: zavislosti z requirements-dev.lock
+        run: |
+          python -m pip install -r requirements-dev.lock
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: kontrola - scripts/ci_check.sh
+        run: scripts/ci_check.sh
+
+      - name: artefakt
+        uses: actions/upload-artifact@v5
+        with:
+          name: swilab-wheel-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
