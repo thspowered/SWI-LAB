@@ -798,7 +798,8 @@ sequenceDiagram
 
     Life->>Store: načítaj rezerváciu so zámkom
     Store->>DB: SELECT ... FOR UPDATE
-    DB-->>Life: Reservation(DRAFT)
+    DB-->>Store: riadok rezervácie
+    Store-->>Life: Reservation(DRAFT)
     Note over Life: predpoklady v poradí diagramu aktivít 3.3 —<br/>BR-06, stav DRAFT, REQ-06, BR-05
 
     Life->>Rules: certification_covers() — BR-04
@@ -813,14 +814,16 @@ sequenceDiagram
     Store->>DB: SELECT ... WHERE state IN (...) AND overlap
 
     alt žiadny konflikt
-        DB-->>Life: prázdny výsledok
+        DB-->>Store: žiadny riadok
+        Store-->>Life: prázdny zoznam
         Life->>Life: reservation.state = cieľový stav
         Life->>Store: commit
         Store->>DB: COMMIT (uvoľní oba zámky)
         Life-->>API: Reservation
         API-->>Student: 200 OK + stav
     else konflikt (BR-02)
-        DB-->>Life: kolidujúca rezervácia
+        DB-->>Store: kolidujúci riadok
+        Store-->>Life: kolidujúca rezervácia
         Life-->>API: DomainError(OVERLAP)
         API-->>Student: 409 {"code": "OVERLAP"}
         Note over Life,DB: stav zostáva DRAFT, zámky uvoľní<br/>rollback pri zatvorení session
@@ -927,7 +930,7 @@ politika prechodov, `_write_expired()`, `_require_allocatable()` — je v C05.5.
 | -------- | -------- |
 | C02 ↔ G2 | **OK.** Všetkých päť operácií má v G2 vlastníka; `BR-01`–`BR-08` sú pokryté `Domain Rules` a `Reservation Lifecycle`. |
 | C2 ↔ G2 | **OK po oprave.** Prvý návrh dával `Approval Workflow` vlastníctvo prechodu `PENDING_APPROVAL → CONFIRMED`, čím by invariant mal dvoch vlastníkov — presne to, čo ADR-01 ruší. Opravené v G2 aj G3: Approval Workflow prechod *žiada*. Pri review ešte R-2 a R-3 nižšie. |
-| G2 ↔ H1 | **OK po oprave (R-4).** Sekvencia používa iba závislosti zo zoznamu v G2. `Reservation Lifecycle` nevolá `Reservation API` späť. |
+| G2 ↔ H1 | **OK po oprave (R-4, R-7).** Sekvencia používa iba závislosti zo zoznamu v G2. `Reservation Lifecycle` nevolá `Reservation API` späť. |
 | H1 ↔ H2 | **OK po oprave (R-1).** Každá lifeline a správa z H1 má v H2 vlastníka. |
 | statechart ↔ G3/H1 | **OK po oprave.** Statechart v `diagrams.md` nerozlišuje, kto prechod rozhoduje a kto žiada — G3 to dopĺňa, statechart sa nemení (baseline v0.2 zostáva). Pri review ešte R-3. |
 | G2 ↔ G4 | **OK.** Sedem logických prvkov beží v jednom procese; `Notification Integration` nie je ani v jednom, lebo neexistuje. |
@@ -950,6 +953,15 @@ viditeľné namiesto toho, aby sme prepísali výsledky vyššie.
 | R-4 | G2 ↔ H1 | H1 používal `Clock` a session bez šípky v G2; G2 viedol `approve / reject` do lifecycle a `Domain Rules` do úložiska; H1 kreslil certifikát pred zámkom prístroja a kontroly oprávnenia, stavu a času ako volania `Domain Rules`, hoci ich robí lifecycle. | G2 prekreslený a doplnený o úplný zoznam závislostí, H1 zoradený podľa kódu. |
 | R-5 | G1 | Databáza bola v kontexte ako externý systém. | Presunutá do G4; v kontexte ostali IdP a Notification Service. |
 | R-6 | ADR ↔ G2/G4 ↔ kód | Zámok nad prístrojom bol „predpokladom volajúceho", nie vecou vlastníka invariantu; režim zámku a úroveň izolácie, na ktorej riešenie stojí, neboli nikde zapísané. | Zámok si berie `enter_blocking_state()` sám; ADR-01 doplnené o režim zámku a dôsledok č. 5; v delte dva riadky `CHANGE`. |
+
+### Doplnenie 2026-11-16
+
+Prehliadla ho kontrola aj review PR #7; našiel sa pri príprave prezentácie
+`/confirm` podľa H1.
+
+| # | Kontrola | Rozpor | Oprava |
+| - | -------- | ------ | ------ |
+| R-7 | G2 ↔ H1 | Tri odpovede v H1 išli `DB-->>Life` — z databázy rovno do `Reservation Lifecycle`, popri `Reservation Store`, ktorý databázu volal. Odpoveď v sekvenčnom diagrame patrí tomu, kto správu poslal. Navyše tak H1 kreslil väzbu `Reservation Lifecycle` ↔ `Reservation DB`, ktorú zoznam závislostí v G2 nepovoľuje (do databázy vedie iba `Reservation Store`, SQL). Aj popis nesedel: databáza vracia riadok, entitu `Reservation` z neho robí až `Session`. | Každá z troch odpovedí ide `DB-->>Store` (riadok) a `Store-->>Life` (entita alebo zoznam). Volania sa nemenili, kód tiež nie. Odpovede pri `get_session()` a pri zámku prístroja zostávajú vynechané — v UML sú návratové správy nepovinné. |
 
 ## J. AS-IS → TO-BE delta
 
