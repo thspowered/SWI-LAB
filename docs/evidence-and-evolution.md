@@ -2082,3 +2082,13 @@ menil **kód** (`src/`, `pyproject.toml`), nie od posledného commitu vôbec.
 Ten istý kód tak dá bajtovo ten istý wheel, aj keď medzitým pribudli commity
 iba s dokumentáciou — identita produktu sa nemení zmenou README. Pre vetvu A
 to bol commit `35d684f` (vtedy posledný vôbec, teda rovnaký výsledok).
+
+**Nález na PR #15 — CI dalo iný hash než lokálny beh.** Po zavedení tohto
+pravidla zostavilo CI z PR #15 wheel `9ec78c06…`, lokálne `2d3adcc3…`, a ako
+posledný commit s kódom hlásilo `3ce38a4` — syntetický merge commit PR, nie
+náš commit. Príčina: `actions/checkout` predvolene sťahuje iba posledný
+commit (`fetch-depth: 1`). V plytkom klone je ten commit koreňom histórie
+a `git log -- src` ho hlási ako zmenu všetkého. Reprodukované lokálne na
+`951982c`: plytký klon → `951982c` (commit iba s README), úplný klon →
+`9ede5a6`. Pri vetve A sa chyba neprejavila, lebo vtedy sa bral čas
+posledného commitu vôbec. Oprava: `fetch-depth: 0` v `ci.yml`.
