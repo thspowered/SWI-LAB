@@ -16,7 +16,8 @@ class ErrorCode(StrEnum):
     MISSING_CERTIFICATION = "MISSING_CERTIFICATION"
     OVERLAP = "OVERLAP"
     TOO_LATE = "TOO_LATE"
-    #: v0.2 - ziadosti o schvalenie nastal starts_at (BR-08).
+    #: v0.2 - ziadosti o schvalenie uplynul termin rozhodnutia (BR-08). Od v0.4
+    #: je to skorsi z okamihov podanie + 48 h a starts_at, nie iba starts_at.
     EXPIRED = "EXPIRED"
     #: Rezervacia uz zacala, takze ju uz nemozno potvrdit (REQ-06).
     #: Odlisne od START_IN_PAST: ten hovori o CHYBNOM VSTUPE pri vytvarani,

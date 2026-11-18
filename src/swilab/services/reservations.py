@@ -1,4 +1,4 @@
-"""Pat operacii podla docs/specification.md, baseline v0.2.
+"""Pat operacii podla docs/specification.md, baseline v0.4.
 
 Jedna funkcia = jedna operacia (OP-01 az OP-05). Poradie kontrol v kazdej
 funkcii sedi s diagramom aktivit v docs/diagrams.md; ked sa poradie zmeni
@@ -258,9 +258,10 @@ def enter_blocking_state(
             "v blokujucom stave",
         )
     if target_state is ReservationState.PENDING_APPROVAL:
-        # Termin PRED stavom: obmedzenie DD-9 nie je odlozitelne, takze riadok
-        # nesmie byt ani na okamih PENDING_APPROVAL bez terminu - ani keby
-        # medzi dvoma priradeniami prebehol autoflush.
+        # Termin v tom istom kroku ako stav: obmedzenie DD-9 nie je
+        # odlozitelne, takze riadok nesmie odist do databazy ako
+        # PENDING_APPROVAL bez terminu. Oba stlpce zapise jeden UPDATE pri
+        # commite; poradie priradeni drzi pravidlo citatelne na jednom mieste.
         reservation.decision_deadline = decision_deadline(now, reservation.starts_at)
     reservation.state = target_state
 
@@ -365,7 +366,8 @@ def check_availability(
     pristroj vtedy drzal' je legitimna.
 
     Od v0.2 do vyhodnotenia vstupuje cas: ta ista ziadost je rano
-    blokujuca a po starts_at uz nie. Je to cena za expiraciu bez
+    blokujuca a po svojom termine rozhodnutia (v0.4: podanie + 48 h alebo
+    starts_at, co nastane skor) uz nie. Je to cena za expiraciu bez
     planovaca a specifikacia ju priznava.
     """
     instrument = _require_instrument(session, instrument_id)
