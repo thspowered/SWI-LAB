@@ -1,5 +1,5 @@
-"""Mutacne overenie testov jednotky Reservation Lifecycle (C05)
-a uzavretych nalezov z nezavisleho review (C06).
+"""Mutacne overenie testov jednotky Reservation Lifecycle (C05),
+uzavretych nalezov z nezavisleho review (C06) a zmeny CR-08 (C09, D*).
 
 Otazka, na ktoru skript odpoveda: su testy odvodene z navrhu VAKUOVE,
 alebo naozaj padnu, ked sa navrh porusi?
@@ -37,6 +37,9 @@ SERVICE = "src/swilab/services/reservations.py"
 POLICY = "src/swilab/domain/transitions.py"
 RULES = "src/swilab/domain/rules.py"
 DB = "src/swilab/db.py"
+MODELS = "src/swilab/models.py"
+MAIN = "src/swilab/main.py"
+API = "src/swilab/api/reservations.py"
 
 #: Testy pridane v C05 - subory a staticke kontroly v spolocnom subore.
 C05_FILES = ("tests/test_transitions.py", "tests/test_lifecycle_contracts.py")
@@ -51,7 +54,13 @@ C05_STATIC = (
 
 # --- useky kodu, na ktore sa mutacie viazu --------------------------------
 
-RULES_IMPORT = "from swilab.domain.rules import certification_covers, is_interval_valid\n"
+RULES_IMPORT = (
+    "from swilab.domain.rules import (\n"
+    "    certification_covers,\n"
+    "    decision_deadline,\n"
+    "    is_interval_valid,\n"
+    ")\n"
+)
 POLICY_IMPORT = (
     "from swilab.domain.transitions import (\n"
     "    cancel_decision,\n"
@@ -90,7 +99,12 @@ CONFIRM_UNKNOWN_TARGET = (
     "        )\n"
 )
 CANCEL_ASKS_POLICY = (
-    "    decision = cancel_decision(reservation.state, reservation.starts_at, now)\n"
+    "    decision = cancel_decision(\n"
+    "        reservation.state,\n"
+    "        reservation.starts_at,\n"
+    "        now,\n"
+    "        decision_deadline=reservation.decision_deadline,\n"
+    "    )\n"
 )
 CANCEL_EXPIRES = (
     "        case ReservationState.EXPIRED:\n"
@@ -185,8 +199,8 @@ MUTATIONS = [
        "        case _:\n")]),
     ("M6", "confirm_decision: cas pred stavom",
      [(POLICY, STATE_CHECK + TIME_CHECK, TIME_CHECK + STATE_CHECK)]),
-    ("M7", "BR-08: ziadost zije aj v okamihu starts_at",
-     [(RULES, "    return now < starts_at", "    return now <= starts_at")]),
+    ("M7", "BR-08: ziadost zije aj v okamihu terminu rozhodnutia",
+     [(RULES, "    return now < decision_deadline", "    return now <= decision_deadline")]),
     ("M8", "strazca prijme neblokujuci ciel",
      [(SERVICE, GUARD_REFUSES, "")]),
     ("M9", "Decision neoveruje tvar rozhodnutia",
@@ -203,7 +217,7 @@ MUTATIONS = [
     ("S1", "sluzba importuje casove pravidlo",
      [(SERVICE, RULES_IMPORT,
        "from swilab.domain.rules import (\n    certification_covers,\n"
-       "    is_interval_valid,\n    may_cancel_confirmed,\n)\n")]),
+       "    decision_deadline,\n    is_interval_valid,\n    may_cancel_confirmed,\n)\n")]),
     ("S2", "druhy zapisovatel EXPIRED",
      [(SERVICE, EXPIRE_WRITES,
        "            reservation.state = ReservationState.EXPIRED\n"
@@ -263,13 +277,14 @@ MUTATIONS = [
     ("R8b", "zamok nad pristrojom je FOR SHARE",
      [(SERVICE, GUARD_LOCK, 'with_for_update={"read": True}')]),
     ("R9", "expiry_decision porovnava stav identitou",
-     [(POLICY, "    if state == ReservationState.PENDING_APPROVAL and not",
-       "    if state is ReservationState.PENDING_APPROVAL and not")]),
+     [(POLICY, "    if state != ReservationState.PENDING_APPROVAL:\n",
+       "    if state is not ReservationState.PENDING_APPROVAL:\n")]),
     ("R10", "Decision prijme zamietnutie bez dovodu",
      [(POLICY, REASON_CHECK, "        if False:\n")]),
     ("R11", "Approval Workflow vola politiku priamo",
      [(SERVICE, DECIDE_ALLOCATES,
-       "    expiry_decision(reservation.state, reservation.starts_at, now)\n"
+       "    expiry_decision(reservation.state, reservation.starts_at, now,\n"
+       "                    decision_deadline=reservation.decision_deadline)\n"
        + DECIDE_ALLOCATES)]),
     ("R12", "zrusenie porovnava cas samo",
      [(SERVICE, CANCEL_ASKS_POLICY,
@@ -279,6 +294,41 @@ MUTATIONS = [
      [(DB, '    event.listen(engine, "connect", _session_in_utc)\n', "")]),
     ("F02", "OP-01: zaciatok presne v okamihu now je prijaty (<= na <)",
      [(SERVICE, "    if starts_at <= now:\n", "    if starts_at < now:\n")]),
+    # --- C09: CR-08, lehota na rozhodnutie o ziadosti (BR-08 v0.4) ---
+    ("D1", "lehota 47 h namiesto 48 h",
+     [(RULES, "DECISION_PERIOD = timedelta(hours=48)",
+       "DECISION_PERIOD = timedelta(hours=47)")]),
+    ("D2", "termin rozhodnutia ignoruje skorsi starts_at (bez min)",
+     [(RULES, "    return min(submitted_at + DECISION_PERIOD, starts_at)",
+       "    return submitted_at + DECISION_PERIOD")]),
+    ("D3", "SQL forma zivosti sa vrati k starts_at (dve formy sa rozidu)",
+     [(SERVICE, "            Reservation.decision_deadline > now,\n",
+       "            Reservation.starts_at > now,\n")]),
+    ("D4", "politika ignoruje termin a riadi sa starts_at",
+     [(POLICY, "    if approval_request_is_alive(decision_deadline, now):",
+       "    if approval_request_is_alive(starts_at, now):")]),
+    ("D5", "strazca nezapise termin pri vstupe do PENDING_APPROVAL",
+     [(SERVICE,
+       "        reservation.decision_deadline = decision_deadline(now, reservation.starts_at)\n",
+       "        pass\n")]),
+    ("D6", "strazca zapise termin aj pri CONFIRMED",
+     [(SERVICE, "    if target_state is ReservationState.PENDING_APPROVAL:\n",
+       "    if True:\n")]),
+    ("D7", "obmedzenie DD-9 bez podmienky decision_deadline <= starts_at",
+     [(MODELS, '"(decision_deadline IS NOT NULL AND decision_deadline <= starts_at)",',
+       '"(decision_deadline IS NOT NULL)",')]),
+    ("D8", "kontrola schemy ignoruje pomenovane obmedzenia",
+     [(DB, "            if isinstance(constraint, CheckConstraint) and constraint.name not in present:\n",
+       "            if False:\n")]),
+    ("D9", "kontrola schemy sa pri starte nevola",
+     [(MAIN, "    ensure_schema(engine)\n", "")]),
+    ("D10", "vyprsanie sa posudi pred opravnenim (REQ-15)",
+     [(SERVICE, "    # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost.",
+       "    if reservation.state is ReservationState.PENDING_APPROVAL:\n"
+       "        expire_request_if_dead(session, reservation=reservation, now=now)\n"
+       "    # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost.")]),
+    ("D11", "odpoved API neuvadza termin rozhodnutia (AC-06)",
+     [(API, '        "decision_deadline": reservation.decision_deadline,\n', "")]),
 ]
 
 

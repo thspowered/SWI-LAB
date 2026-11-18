@@ -1,4 +1,4 @@
-"""Pat operacii podla docs/specification.md, baseline v0.2.
+"""Pat operacii podla docs/specification.md, baseline v0.4.
 
 Jedna funkcia = jedna operacia (OP-01 az OP-05). Poradie kontrol v kazdej
 funkcii sedi s diagramom aktivit v docs/diagrams.md; ked sa poradie zmeni
@@ -34,7 +34,11 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from swilab.domain.rules import certification_covers, is_interval_valid
+from swilab.domain.rules import (
+    certification_covers,
+    decision_deadline,
+    is_interval_valid,
+)
 from swilab.domain.states import BLOCKING_STATES, ReservationState, UserRole
 from swilab.domain.transitions import (
     cancel_decision,
@@ -175,9 +179,11 @@ def _overlapping_blocking(
     """BR-02: rezervacie toho isteho pristroja v BLOKUJUCOM stave, ktore sa
     s intervalom prekryvaju podla BR-01.
 
-    Blokuju CONFIRMED a PENDING_APPROVAL. Ziadost, ktorej uz nastal
-    starts_at, je vyprsana (BR-08) a do blokovania sa nepocita - preto do
-    dotazu vstupuje cas.
+    Blokuju CONFIRMED a PENDING_APPROVAL. Ziadost, ktorej uplynul termin
+    rozhodnutia, je vyprsana (BR-08) a do blokovania sa nepocita - preto
+    do dotazu vstupuje cas. Termin je skorsi z okamihov podanie + 48 h
+    a starts_at (DD-8), takze jedine porovnanie zahrna obe hranice;
+    obmedzenie DD-9 zaruci, ze to plati aj pre data zapisane mimo API.
 
     Podmienka prekryvu (BR-01) je napisana v SQL, aby sa nenacitaval cely
     kalendar pristroja. Je to JEDINE miesto, kde tato nerovnost v kode
@@ -191,10 +197,10 @@ def _overlapping_blocking(
     stmt = select(Reservation).where(
         Reservation.instrument_id == instrument_id,
         Reservation.state.in_(BLOCKING_STATES),
-        # vyprsana ziadost neblokuje (BR-08)
+        # vyprsana ziadost neblokuje (BR-08, DD-8)
         or_(
             Reservation.state == ReservationState.CONFIRMED,
-            Reservation.starts_at > now,
+            Reservation.decision_deadline > now,
         ),
         Reservation.starts_at < ends_at,
         Reservation.ends_at > starts_at,
@@ -213,7 +219,10 @@ def enter_blocking_state(
 ) -> None:
     """JEDINE miesto, kde rezervacia vstupuje do blokujuceho stavu (ADR-01).
 
-    Vezme zamok nad pristrojom, vyhodnoti BR-02 a zapise cielovy stav.
+    Vezme zamok nad pristrojom, vyhodnoti BR-02 a zapise cielovy stav -
+    pri PENDING_APPROVAL aj termin rozhodnutia (BR-08 v0.4, DD-8). Termin
+    je sucast toho, co ziadost znamena, takze ho zapisuje ten isty vlastnik
+    v tom istom kroku.
     Zamok, kontrola a zapis su tu zamerne vedla seba a bez commitu medzi
     nimi - to je obsah REQ-05. Zamok si funkcia berie SAMA: keby bol
     predpokladom volajuceho, stacilo by ho v jednej operacii vynechat
@@ -248,6 +257,12 @@ def enter_blocking_state(
             "interval koliduje s inou rezervaciou toho isteho pristroja "
             "v blokujucom stave",
         )
+    if target_state is ReservationState.PENDING_APPROVAL:
+        # Termin v tom istom kroku ako stav: obmedzenie DD-9 nie je
+        # odlozitelne, takze riadok nesmie odist do databazy ako
+        # PENDING_APPROVAL bez terminu. Oba stlpce zapise jeden UPDATE pri
+        # commite; poradie priradeni drzi pravidlo citatelne na jednom mieste.
+        reservation.decision_deadline = decision_deadline(now, reservation.starts_at)
     reservation.state = target_state
 
 
@@ -275,7 +290,12 @@ def expire_request_if_dead(
     aj zrusenie (OP-04). Vyprsana ziadost sa zapise ako EXPIRED a operacia
     sa zamietne; pre ine stavy nez PENDING_APPROVAL sa nedeje nic (N-05).
     """
-    decision = expiry_decision(reservation.state, reservation.starts_at, now)
+    decision = expiry_decision(
+        reservation.state,
+        reservation.starts_at,
+        now,
+        decision_deadline=reservation.decision_deadline,
+    )
     match decision.target:
         case None:
             return
@@ -346,7 +366,8 @@ def check_availability(
     pristroj vtedy drzal' je legitimna.
 
     Od v0.2 do vyhodnotenia vstupuje cas: ta ista ziadost je rano
-    blokujuca a po starts_at uz nie. Je to cena za expiraciu bez
+    blokujuca a po svojom termine rozhodnutia (v0.4: podanie + 48 h alebo
+    starts_at, co nastane skor) uz nie. Je to cena za expiraciu bez
     planovaca a specifikacia ju priznava.
     """
     instrument = _require_instrument(session, instrument_id)
@@ -461,7 +482,12 @@ def cancel_reservation(
     # zopakovat ktokolvek.
     _require_authorized(reservation, requester)
 
-    decision = cancel_decision(reservation.state, reservation.starts_at, now)
+    decision = cancel_decision(
+        reservation.state,
+        reservation.starts_at,
+        now,
+        decision_deadline=reservation.decision_deadline,
+    )
     match decision.target:
         case None:
             pass

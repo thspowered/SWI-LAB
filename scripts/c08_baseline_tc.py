@@ -21,6 +21,12 @@ Nespustat sucasne s pytest ani s mutation_check.py - zdielaju databazu.
 
 Verdikt kazdeho test case je PASS, FAIL alebo BLOCKED (aplikacia alebo
 databaza nebezi). Navratovy kod je 0 iba vtedy, ked su vsetky PASS.
+
+C09 (specifikacia v0.4, CR-08): TC-C08-01 a TC-C08-02 su regresia a ich
+Expected sa nemeni. TC-C08-03 sa podla planu z C08 stal oracle novej
+poziadavky - nove Expected je zapisane PRED behom proti kodu v0.4
+(evidence, cast C09). Nezavisly SQL oracle BR-02 je prepisany na pravidlo
+v0.4.
 """
 
 import hashlib
@@ -90,11 +96,15 @@ def at(hh: int, mm: int = 0) -> datetime:
 
 RESERVATION_COLUMNS = [
     "id", "instrument_id", "user_id", "starts_at", "ends_at", "state", "created_at",
+    "decision_deadline",
 ]
 
-# Nezavisly prepis BR-02 + BR-08 (v0.2) do SQL: dvojice blokujucich
+# Nezavisly prepis BR-02 + BR-08 (v0.4) do SQL: dvojice blokujucich
 # rezervacii toho isteho pristroja, ktore sa prekryvaju podla BR-01.
-# Blokuje CONFIRMED a ziva ziadost (starts_at este nenastal).
+# Blokuje CONFIRMED a ziva ziadost - pred terminom rozhodnutia AJ pred
+# starts_at. Obe podmienky su tu zamerne, hoci aplikacia porovnava iba
+# termin (DD-8): oracle prepisuje pravidlo zo specifikacie, nie navrh,
+# takze sa nespolieha ani na obmedzenie DD-9.
 BLOCKING_OVERLAP_PAIRS = """
     SELECT a.id, b.id
     FROM reservations a
@@ -102,9 +112,11 @@ BLOCKING_OVERLAP_PAIRS = """
       ON a.instrument_id = b.instrument_id AND a.id < b.id
     WHERE a.starts_at < b.ends_at AND b.starts_at < a.ends_at
       AND (a.state = 'CONFIRMED'
-           OR (a.state = 'PENDING_APPROVAL' AND a.starts_at > now()))
+           OR (a.state = 'PENDING_APPROVAL'
+               AND a.decision_deadline > now() AND a.starts_at > now()))
       AND (b.state = 'CONFIRMED'
-           OR (b.state = 'PENDING_APPROVAL' AND b.starts_at > now()))
+           OR (b.state = 'PENDING_APPROVAL'
+               AND b.decision_deadline > now() AND b.starts_at > now()))
 """
 
 # Prekryv v case bez ohladu na stav - aby bolo vidiet, ze kolizia v case
@@ -157,11 +169,21 @@ def reset_and_seed_common(conn: psycopg.Connection) -> None:
         )
 
 
-def insert_reservation(conn, rid, owner, starts_at, ends_at, state, created_at=None):
+def insert_reservation(
+    conn, rid, owner, starts_at, ends_at, state, created_at=None, decision_deadline=None
+):
+    """Priamy zapis - musi splnit obmedzenie DD-9 rovnako ako aplikacia:
+    ziadost (PENDING_APPROVAL) ma termin rozhodnutia, najneskor v starts_at.
+    Bez zadaneho terminu dostane ziadost termin = starts_at, teda ziadost
+    spred v0.4 (AC-09)."""
+    if state == "PENDING_APPROVAL" and decision_deadline is None:
+        decision_deadline = starts_at
     conn.execute(
         "INSERT INTO reservations (id, instrument_id, user_id, starts_at, "
-        "ends_at, state, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-        (rid, R1, owner, starts_at, ends_at, state, created_at or datetime.now(UTC)),
+        "ends_at, state, created_at, decision_deadline) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (rid, R1, owner, starts_at, ends_at, state,
+         created_at or datetime.now(UTC), decision_deadline),
     )
 
 
@@ -352,19 +374,27 @@ def tc_02(client, run: int) -> Case:
 
 
 def tc_03(client, run: int) -> Case:
-    """Charakterizacia obmedzenia, ktore CR-08 meni: zabudnuta ziadost
-    blokuje pristroj a da sa schvalit, nech bola podana kedykolvek."""
+    """Oracle CR-08 (v0.4). Do C08 charakterizacia obmedzenia - zabudnuta
+    ziadost blokovala pristroj az do zaciatku a dala sa schvalit, nech bola
+    podana kedykolvek. Nove Expected je z planu v C08 (evidence, TC-C08-03,
+    *Rozhodnutie*) a zo specifikacie v0.4, zapisane pred behom."""
     case = Case("TC-C08-03", run)
     long_ago = datetime.now(UTC) - timedelta(days=10)
+    # Ziadost podana pred 10 dnami: termin rozhodnutia = podanie + 48 h
+    # (DD-8; starts_at je az o 7 dni). Bez terminu v minulosti by ju AC-09
+    # povazovalo za ziadost spred zmeny a ostala by ziva.
+    deadline = long_ago + timedelta(hours=48)
     with connect() as conn:
         reset_and_seed_common(conn)
         insert_reservation(
-            conn, B1, S1, at(10), at(11), "PENDING_APPROVAL", created_at=long_ago
+            conn, B1, S1, at(10), at(11), "PENDING_APPROVAL",
+            created_at=long_ago, decision_deadline=deadline,
         )
         insert_reservation(conn, B2, S2, at(10), at(11), "DRAFT")
         initial = reservations(conn)
         case.step(
-            1, "reset + R1, B1 (ziadost, DRAFT vznikol pred 10 dnami), B2",
+            1, "reset + R1, B1 (ziadost podana pred 10 dnami, termin rozhodnutia "
+            "pred 8 dnami), B2",
             "B1 PENDING_APPROVAL, B2 DRAFT",
             state_of(initial),
             state_of(initial) == {"B1": "PENDING_APPROVAL", "B2": "DRAFT"},
@@ -379,7 +409,7 @@ def tc_03(client, run: int) -> Case:
         ]
         case.step(
             2, "precitat stlpce tabulky reservations (information_schema)",
-            "iba " + ", ".join(RESERVATION_COLUMNS) + " - okamih podania ziadosti sa neuklada",
+            ", ".join(RESERVATION_COLUMNS) + " - termin rozhodnutia sa uklada (DD-8)",
             columns,
             columns == RESERVATION_COLUMNS,
         )
@@ -391,10 +421,10 @@ def tc_03(client, run: int) -> Case:
     conflicts = [NAMES.get(uuid.UUID(i), i) for i in body.get("conflicting_reservation_ids", [])]
     case.step(
         3, "GET availability R1 [10:00, 11:00)",
-        "200, UNAVAILABLE, reason PENDING_APPROVAL, kolizia [B1] (REQ-03, REQ-13)",
+        "200, AVAILABLE, ziadna kolizia - ziadost po termine neblokuje (AC-03)",
         f"{response.status_code} {body.get('status')} {body.get('reason')} {conflicts}",
-        response.status_code == 200 and body.get("status") == "UNAVAILABLE"
-        and body.get("reason") == "PENDING_APPROVAL" and conflicts == ["B1"],
+        response.status_code == 200 and body.get("status") == "AVAILABLE"
+        and conflicts == [],
     )
     response = call(
         client, "POST", f"/reservations/{B2}/confirm", json={"requested_by": str(S2)}
@@ -402,9 +432,19 @@ def tc_03(client, run: int) -> Case:
     body = _body(response)
     case.step(
         4, "POST confirm(B2), potvrdzuje vlastnik S2",
-        "zamietnute: 409 OVERLAP - ziva ziadost blokuje (REQ-04, BR-08 v0.2)",
-        f"{response.status_code} {body.get('code', body.get('state'))}",
-        response.status_code == 409 and body.get("code") == "OVERLAP",
+        "200, state PENDING_APPROVAL a v odpovedi termin rozhodnutia - B1 "
+        "neblokuje (AC-03), R1 vyzaduje schvalenie (REQ-10, AC-06)",
+        # Do pozorovania ide iba to, ci termin v odpovedi je - nie jeho
+        # hodnota. Ta zavisi od skutocnych hodin servera, takze dva behy by
+        # sa v nej vzdy lisili o cas medzi nimi a porovnanie behov by hlasilo
+        # rozdiel, ktory nie je chybou (nalez prveho behu na kode v0.4).
+        # Hodnota je vidiet v riadku HTTP vyssie; presne ju overuje
+        # test_http_confirm_of_a_request_returns_its_decision_deadline.
+        f"{response.status_code} {body.get('state', body.get('code'))} "
+        f"decision_deadline="
+        f"{'uvedeny' if body.get('decision_deadline') is not None else 'chyba'}",
+        response.status_code == 200 and body.get("state") == "PENDING_APPROVAL"
+        and body.get("decision_deadline") is not None,
     )
     response = call(
         client, "POST", f"/reservations/{B1}/approve", json={"requested_by": str(V1)}
@@ -412,17 +452,19 @@ def tc_03(client, run: int) -> Case:
     body = _body(response)
     case.step(
         5, "POST approve(B1), schvaluje V1",
-        "200, state CONFIRMED - ziadna lehota na rozhodnutie neexistuje (REQ-11)",
-        f"{response.status_code} {body.get('state', body.get('code'))}",
-        response.status_code == 200 and body.get("state") == "CONFIRMED",
+        "409 EXPIRED - termin rozhodnutia uplynul (AC-02, REQ-15)",
+        f"{response.status_code} {body.get('code', body.get('state'))}",
+        response.status_code == 409 and body.get("code") == "EXPIRED",
     )
     with connect() as conn:
         after = reservations(conn)
+        blocking = pairs(conn, BLOCKING_OVERLAP_PAIRS)
         case.step(
             6, "precitat ulozeny stav (nove spojenie)",
-            "B1 CONFIRMED, B2 DRAFT",
-            state_of(after),
-            state_of(after) == {"B1": "CONFIRMED", "B2": "DRAFT"},
+            "B1 EXPIRED, B2 PENDING_APPROVAL; ziadna blokujuca dvojica (BR-02)",
+            {"stavy": state_of(after), "blokujuce_prekryvy": blocking},
+            state_of(after) == {"B1": "EXPIRED", "B2": "PENDING_APPROVAL"}
+            and blocking == [],
         )
     return case
 

@@ -58,30 +58,53 @@ class Decision:
 
 
 def expiry_decision(
-    state: ReservationState, starts_at: datetime, now: datetime
+    state: ReservationState,
+    starts_at: datetime,
+    now: datetime,
+    *,
+    decision_deadline: datetime | None,
 ) -> Decision:
-    """BR-08, REQ-15: ziadost, ktorej nastal starts_at, je vyprsana.
+    """BR-08, REQ-15: ziadost, ktorej uplynul termin rozhodnutia, je vyprsana.
 
     Prechod riadi cas, nie operacia - preto ma jedno znenie pre OP-04
     aj OP-05. Tyka sa IBA stavu PENDING_APPROVAL; DRAFT nevyprsi, lebo
-    nikoho neblokuje (N-05).
+    nikoho neblokuje (N-05). Pri inych stavoch termin necita - schvalena
+    alebo zrusena rezervacia si ho nesie iba ako zaznam (DD-9).
+
+    Termin je povinny a pomenovany parameter: dva susedne casy v poradi
+    by sa dali nepozorovane vymenit a predvolena hodnota by bola presne
+    ten NULL, ktory zakazuje CA-6.
     """
     # Stav sa vo vsetkych troch funkciach porovnava HODNOTOU (==), rovnako
     # ako to robi `match` v cancel_decision. Keby sa tu porovnavalo cez
     # `is`, ten isty vstup by v dvoch tabulkach znamenal dva rozne stavy.
-    if state == ReservationState.PENDING_APPROVAL and not approval_request_is_alive(
-        starts_at, now
-    ):
-        return Decision(
-            target=ReservationState.EXPIRED,
-            rejection=ErrorCode.EXPIRED,
-            reason="ziadost o schvalenie vyprsala - jej termin uz zacal",
-        )
-    return Decision()
+    if state != ReservationState.PENDING_APPROVAL:
+        return Decision()
+    if decision_deadline is None:
+        # V databaze to nedovoli obmedzenie DD-9. Tiche "zije do starts_at"
+        # by sa rozislo s SQL formou zivosti, kde je NULL > now nezname.
+        raise ValueError("ziadost bez terminu rozhodnutia porusuje CA-6 (DD-9)")
+    if approval_request_is_alive(decision_deadline, now):
+        return Decision()
+    # Dovod nesmie klamat: pri vyprsani lehoty termin rezervacie este
+    # nezacal. Termin je skorsi z oboch okamihov (DD-8), takze sa rovna
+    # starts_at, prave ked rozhodol zaciatok.
+    reason = (
+        "ziadost o schvalenie vyprsala - termin rezervacie uz zacal"
+        if decision_deadline >= starts_at
+        else "ziadost o schvalenie vyprsala - uplynula lehota na rozhodnutie"
+    )
+    return Decision(
+        target=ReservationState.EXPIRED, rejection=ErrorCode.EXPIRED, reason=reason
+    )
 
 
 def cancel_decision(
-    state: ReservationState, starts_at: datetime, now: datetime
+    state: ReservationState,
+    starts_at: datetime,
+    now: datetime,
+    *,
+    decision_deadline: datetime | None,
 ) -> Decision:
     """OP-04: co zrusenie urobi s rezervaciou v danom stave (BR-03).
 
@@ -96,7 +119,9 @@ def cancel_decision(
         case ReservationState.PENDING_APPROVAL:
             # N-04: expiracia (BR-08) ma prednost pred politikou rusenia.
             # 60-minutova lehota tu neplati - ziadost este nie je zavazok.
-            expiry = expiry_decision(state, starts_at, now)
+            expiry = expiry_decision(
+                state, starts_at, now, decision_deadline=decision_deadline
+            )
             if expiry.target is not None:
                 return expiry
             return Decision(target=ReservationState.CANCELLED)

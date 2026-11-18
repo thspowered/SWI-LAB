@@ -113,11 +113,15 @@ BASE_URL="http://127.0.0.1:$PORT" "$PYTHON" scripts/c08_baseline_tc.py
 kill "$APP_PID" 2>/dev/null || true; wait "$APP_PID" 2>/dev/null || true; APP_PID=""
 
 # --- 6. artefakt -----------------------------------------------------------
-# SOURCE_DATE_EPOCH = cas commitu: ten isty commit da bajtovo ten isty wheel.
+# SOURCE_DATE_EPOCH = cas posledneho commitu, ktory menil KOD (src/,
+# pyproject.toml): ten isty kod da bajtovo ten isty wheel - aj ked medzitym
+# pribudli commity iba s dokumentaciou. Identita produktu sa tak nemeni
+# zmenou README.
 # --no-isolation: pouzije setuptools z locku, nie najnovsi z PyPI.
 step "6/6 zostavenie artefaktu"
 rm -rf dist build src/*.egg-info
-SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+echo "kod naposledy zmeneny v: $(git log -1 --format=%h -- src pyproject.toml)"
+SOURCE_DATE_EPOCH="$(git log -1 --format=%ct -- src pyproject.toml)" \
     "$PYTHON" -m build --wheel --no-isolation --outdir dist > /dev/null
 rm -rf build src/*.egg-info
 (

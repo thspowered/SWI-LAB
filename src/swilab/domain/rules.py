@@ -1,4 +1,4 @@
-"""Domenove pravidla zo specifikacie baseline v0.2 (BR-01, BR-03, BR-04, BR-08).
+"""Domenove pravidla zo specifikacie baseline v0.4 (BR-01, BR-03, BR-04, BR-08).
 
 Funkcie su ciste: nepoznaju HTTP ani databazu, pracuju iba s hodnotami.
 Kazda nesie v docstringu pravidlo, ktore vynucuje, aby sa dalo prejst od
@@ -10,6 +10,12 @@ from datetime import datetime, timedelta
 #: BR-03 - prevadzkova lehota laboratoria na zrusenie potvrdenej rezervacie.
 #: Rozhodnutie timu, nie odvodena velicina.
 CANCELLATION_LEAD_TIME = timedelta(minutes=60)
+
+#: BR-08 (v0.4) - lehota na rozhodnutie o ziadosti od jej podania.
+#: Predpoklad timu za rolu veduceho laboratoria (CR-08, CA-1), nie odvodena
+#: velicina - rovnako ako CANCELLATION_LEAD_TIME. Pevna hodnota systemu,
+#: nie nastavenie prostredia (CA-5).
+DECISION_PERIOD = timedelta(hours=48)
 
 
 def is_interval_valid(starts_at: datetime, ends_at: datetime) -> bool:
@@ -30,17 +36,28 @@ def certification_covers(valid_until: datetime, starts_at: datetime) -> bool:
     return valid_until > starts_at
 
 
-def approval_request_is_alive(starts_at: datetime, now: datetime) -> bool:
-    """BR-08: ziadost o schvalenie plati, kym nenastane starts_at.
+def decision_deadline(submitted_at: datetime, starts_at: datetime) -> datetime:
+    """BR-08 (v0.4): termin rozhodnutia o ziadosti - skorsi z okamihov
+    podanie + DECISION_PERIOD a starts_at.
 
-    Hranica je ostra: v okamihu starts_at uz ziadost neplati. Lehota je
-    odvodena z dat, ktore uz mame - specifikacia tym nezavadza ziadne
-    vymyslene cislo.
+    Urci sa raz, pri podani, a ulozi sa (DD-8). starts_at sa po vytvoreni
+    rezervacie nemeni, takze skorsi z oboch okamihov neskor nezastara -
+    a zivost je potom jedine porovnanie s ulozenym terminom.
+    """
+    return min(submitted_at + DECISION_PERIOD, starts_at)
+
+
+def approval_request_is_alive(decision_deadline: datetime, now: datetime) -> bool:
+    """BR-08: ziadost o schvalenie plati, kym neuplynie jej termin rozhodnutia.
+
+    Hranica je ostra: v okamihu terminu uz ziadost neplati. Termin je
+    skorsi z okamihov podanie + 48 h a starts_at (decision_deadline()),
+    takze tato podmienka zahrna aj hranicu starts_at z v0.2.
 
     Tyka sa IBA stavu PENDING_APPROVAL. DRAFT nevyprsi, lebo nikoho
     neblokuje (nalez N-05).
     """
-    return now < starts_at
+    return now < decision_deadline
 
 
 def may_cancel_confirmed(starts_at: datetime, now: datetime) -> bool:

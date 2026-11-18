@@ -46,6 +46,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Cela historia, nie iba posledny commit: ci_check.sh odvodzuje cas
+          # artefaktu od posledneho commitu, ktory menil kod (src/,
+          # pyproject.toml). V plytkom klone je jediny dostupny commit
+          # "korenom", ktory zdanlivo zmenil vsetko - hash wheelu by potom
+          # zavisel od commitu s dokumentaciou alebo od syntetickeho merge
+          # commitu PR, nie od kodu (nalez na PR #15).
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:

@@ -16,7 +16,8 @@ class ReservationState(StrEnum):
     CANCELLED = "CANCELLED"
     #: v0.2 - veduci ziadost zamietol. Koncovy stav, neblokuje.
     REJECTED = "REJECTED"
-    #: v0.2 - ziadosti nastal starts_at skor, nez o nej niekto rozhodol.
+    #: v0.2 - ziadosti uplynul termin rozhodnutia skor, nez o nej niekto
+    #: rozhodol (BR-08; od v0.4 podanie + 48 h alebo starts_at, co nastane skor).
     EXPIRED = "EXPIRED"
 
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -77,6 +77,17 @@ class Reservation(Base):
     """
 
     __tablename__ = "reservations"
+    __table_args__ = (
+        # DD-9: ziadost ma termin rozhodnutia (CA-6) a ten je najneskor
+        # v starts_at. Druha podmienka stazi predpoklad DD-8, na ktorom stoji
+        # jedine porovnanie zivosti v SQL - aj pri priamom zapise mimo API.
+        # Obmedzenie nevola now(), takze namietka ADR-01 sa na neho nevztahuje.
+        CheckConstraint(
+            "state <> 'PENDING_APPROVAL' OR "
+            "(decision_deadline IS NOT NULL AND decision_deadline <= starts_at)",
+            name="ck_reservations_request_has_deadline",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     instrument_id: Mapped[uuid.UUID] = mapped_column(
@@ -95,6 +106,13 @@ class Reservation(Base):
     # chybou az v databaze.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    # BR-08 v0.4, DD-8: okamih, do ktoreho musi veduci rozhodnut -
+    # min(podanie + 48 h, starts_at). Zapise ho strazca pri vstupe do
+    # PENDING_APPROVAL; po rozhodnuti ostava ako zaznam. NULL ma rezervacia,
+    # ktora ziadostou nikdy nebola.
+    decision_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     instrument: Mapped[Instrument] = relationship(back_populates="reservations")

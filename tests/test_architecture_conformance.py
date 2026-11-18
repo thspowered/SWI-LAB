@@ -350,6 +350,9 @@ FORBIDDEN_FOR_POLICY = (
     "swilab.api",
     "swilab.clock",
     "swilab.main",
+    # Nalez review C08: bez tohto riadku by si politika mohla precitat
+    # konfiguraciu a sada by ostala zelena.
+    "swilab.config",
 )
 
 #: Operacie, ktore menia stav existujucej rezervacie, a funkcia politiky,
@@ -362,9 +365,16 @@ POLICY_OF_OPERATION = {
 
 #: Pomenovane casove pravidla prechodov. Mimo balika domain/ ich nesmie
 #: pouzit nikto. (Druha forma BR-08 je SQL podmienka v dotaze na prekryv -
-#: ta meno nema a tato kontrola o nej nehovori.)
+#: ta meno nema a tato kontrola o nej nehovori.) DECISION_PERIOD je lehota
+#: z BR-08 v0.4. decision_deadline() v zozname nie je: neposudzuje prechod,
+#: iba urci udaj, ktory zapise strazca (navrh C09).
 TRANSITION_TIME_RULES = frozenset(
-    {"may_cancel_confirmed", "approval_request_is_alive", "CANCELLATION_LEAD_TIME"}
+    {
+        "may_cancel_confirmed",
+        "approval_request_is_alive",
+        "CANCELLATION_LEAD_TIME",
+        "DECISION_PERIOD",
+    }
 )
 
 #: Jedina implementacia predpokladov alokacie (DD-5) a ti, co ju volaju.
@@ -419,7 +429,10 @@ def _in_service(names) -> set[tuple[str, str]]:
 def _mentions_time(node: ast.AST) -> bool:
     return any(
         (isinstance(child, ast.Name) and child.id == "now")
-        or (isinstance(child, ast.Attribute) and child.attr in {"starts_at", "ends_at"})
+        or (
+            isinstance(child, ast.Attribute)
+            and child.attr in {"starts_at", "ends_at", "decision_deadline"}
+        )
         for child in ast.walk(node)
     )
 
