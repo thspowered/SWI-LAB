@@ -61,6 +61,12 @@ pytest -v
 uvicorn swilab.main:app --reload
 ```
 
+Ak `docker compose up` hlási *container name "/swilab-db" is already in use*,
+na stroji už existuje databáza z iného checkoutu tohto repozitára
+(`docker-compose.yml` má pevné `container_name`). Odstráň ju
+`docker rm -f swilab-db` a príkaz zopakuj — dáta nemá, kontajner je bez
+volume (`ADR-02`). Našiel to čistý checkout druhého člena v C09.
+
 Závislosti sa inštalujú zo **zamknutého** súboru `requirements-dev.lock`, nie
 z `pyproject.toml` — ten uvádza iba spodné hranice a dával by pri každej
 inštalácii iné verzie (časť C09). Celú kontrolu, ktorú robí CI, spustí lokálne
@@ -332,7 +338,7 @@ bez `[dev]`. Hlavičku súborov zachovaj.
 | **Skutočná integračná hranica** | HTTP → aplikácia (`uvicorn`) → PostgreSQL 16. Stav po commite číta `c08_baseline_tc.py` **novým spojením priamo z databázy**, nie z odpovede API. Bez skutočnej databázy sada nebeží vôbec. |
 | **Lock + runtime + schéma + konfigurácia** | `requirements.lock` (24 runtime balíčkov), `requirements-dev.lock` (35); Python 3.12; schéma z `models.py` cez `create_all()`, bez migrácií podľa `ADR-02`; jediná konfigurácia `DATABASE_URL` (`.env.example`). |
 | **Príkazy pre čistý checkout** | časť *Príkazy* vyššie a *Ako to spustiť* |
-| **CI** | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) pri push a PR. Prvý beh: [`success`](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765) na `35d684f` — všetkých 6 krokov, rovnaké výsledky ako lokálne. |
+| **CI** | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) pri každom PR a pri push do `main`. Prvý beh: [`success`](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765) na `35d684f` — všetkých 6 krokov, rovnaké výsledky ako lokálne. |
 | **Nezávislý reprodukujúci člen** | **PENDING** — T. Hrubý (druhý člen; vetvu A pripravil T. Krišica) |
 | **Artefakt** | `swilab-0.2.0-py3-none-any.whl`, reprodukovateľný — ten istý commit dá bajtovo ten istý wheel. Pre `35d684f`: SHA256 `a4e80878…fb7592`, **zhodný z macOS lokálne aj z Linuxu v CI**. **Verzia `0.2.0` je predbežná** — či bude `0.4.0`, rozhodne vetva B. |
 | **Obnova / rollback** | Rollback kódu **nevráti dáta v databáze**. Pri `CR-08` je postup rollbacku zapísaný v analýze dopadu (jeden `UPDATE`, potom starý kód); vyskúšať ho treba vo vetve B. Databáza nemá volume, prestavba je contingency z `R-04`. |

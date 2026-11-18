@@ -1793,7 +1793,7 @@ sú testy vyššie regresnými testami AC-07.
 C09 sa delí na dve časti, ktoré na sebe nezávisia:
 
 - **vetva A** (tento oddiel) — automatizácia a identita release: zamknuté
-  závislosti, jeden kontrolný skript, CI pri push a PR, reprodukovateľný
+  závislosti, jeden kontrolný skript, CI pri PR a push do `main`, reprodukovateľný
   artefakt. **Kód aplikácie sa nemení.**
 - **vetva B** — samotná zmena `CR-08` podľa ohraničenej delty z C08
   ([intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08)).
@@ -1908,7 +1908,7 @@ vypísal. Metadáta wheelu (`Requires-Dist`) obsahujú spodné hranice z
 
 ### Vetva A — CI
 
-`.github/workflows/ci.yml`, pri každom push a PR: Ubuntu, Python 3.12,
+`.github/workflows/ci.yml`, pri každom PR a push do `main`: Ubuntu, Python 3.12,
 PostgreSQL 16 ako service kontajner na porte 5433 (rovnako ako
 `docker-compose.yml`, takže `DATABASE_URL` je všade rovnaká), závislosti
 z `requirements-dev.lock`, potom `scripts/ci_check.sh` a wheel ako artefakt
