@@ -61,6 +61,12 @@ pytest -v
 uvicorn swilab.main:app --reload
 ```
 
+Ak `docker compose up` hlási *container name "/swilab-db" is already in use*,
+na stroji už existuje databáza z iného checkoutu tohto repozitára
+(`docker-compose.yml` má pevné `container_name`). Odstráň ju
+`docker rm -f swilab-db` a príkaz zopakuj — dáta nemá, kontajner je bez
+volume (`ADR-02`). Našiel to čistý checkout druhého člena v C09.
+
 Závislosti sa inštalujú zo **zamknutého** súboru `requirements-dev.lock`, nie
 z `pyproject.toml` — ten uvádza iba spodné hranice a dával by pri každej
 inštalácii iné verzie (časť C09). Celú kontrolu, ktorú robí CI, spustí lokálne
@@ -338,7 +344,7 @@ bez `[dev]`. Hlavičku súborov zachovaj.
 | **Skutočná integračná hranica** | HTTP → aplikácia (`uvicorn`) → PostgreSQL 16. Stav po commite číta `c08_baseline_tc.py` **novým spojením priamo z databázy**, nie z odpovede API. Bez skutočnej databázy sada nebeží vôbec. |
 | **Lock + runtime + schéma + konfigurácia** | `requirements.lock` (24 runtime balíčkov), `requirements-dev.lock` (35); Python 3.12; schéma z `models.py` cez `create_all()`, bez migrácií podľa `ADR-02` — od v0.4 so stĺpcom `reservations.decision_deadline` a obmedzením `ck_reservations_request_has_deadline`, aplikácia nad inou schémou nenaštartuje; jediná konfigurácia `DATABASE_URL` (`.env.example`). |
 | **Príkazy pre čistý checkout** | časť *Príkazy* vyššie a *Ako to spustiť* |
-| **CI** | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) pri push a PR. Prvý beh: [`success`](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765) na `35d684f` — všetkých 6 krokov, rovnaké výsledky ako lokálne. |
+| **CI** | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) pri každom PR a pri push do `main`. Prvý beh: [`success`](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765) na `35d684f` — všetkých 6 krokov, rovnaké výsledky ako lokálne. |
 | **Nezávislý reprodukujúci člen** | **T. Hrubý, 2026-11-18** — dva čisté checkouty z GitHubu do nového adresára, macOS 26.6.2 arm64, Python 3.12.11, Docker 28.3.2. (1) `0769da8`: všetkých 6 krokov `ci_check.sh`, wheel `2d3adcc3…788e7d` — **bajtovo rovnaký ako u T. Krišicu**; odchýlka od README: databázový kontajner z pôvodného checkoutu (`container_name`), opravené v README (#13). (2) `8200655`: všetkých 6 krokov **presne podľa README** vrátane nového postupu pri konflikte kontajnera, wheel `cf090f0b…626ef`. Podrobne v evidence. |
 | **Artefakt** | **`swilab-0.4.0-py3-none-any.whl`**, kód `8200655`, SHA256 **`cf090f0b6615c13ec80c49afc8e7d0813d27f033945ee4ea2f45743f905626ef`** — čistý checkout T. Hrubého; rovnaký v CI ([run 44278224079](https://github.com/thspowered/SWI-LAB/actions/runs/44278224079), Linux x86_64, Python 3.12.16). Pred review (kód `9ede5a6`): `2d3adcc3…788e7d`, zhodný u oboch členov. Reprodukovateľný: ten istý kód dá bajtovo ten istý wheel aj po commitoch iba s dokumentáciou (`SOURCE_DATE_EPOCH` z posledného commitu s kódom). Rebase vetvy by hash zmenil — merge commit nie. Vetva A (`0.2.0`, `35d684f`): `a4e80878…fb7592`, zhodný z macOS aj z Linuxu v CI. |
 | **Obnova / rollback** | Rollback kódu **nevráti dáta**: dáta legálne vo v0.4 sú podľa v0.2 porušením BR-02 (overené). Postup `scripts/cr08_rollback.sql` → kód v0.3 → `scripts/cr08_forward.sql` → kód v0.4 **raz vyskúšaný nad dátami**, 8 krokov v evidence. Aplikácia musí pri rollbacku stáť. Prestavba podľa `ADR-02` dáta zmaže (bez volume). |

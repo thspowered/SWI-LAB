@@ -1,4 +1,4 @@
-# C09, krok 4: build, testy a integracna kontrola pri kazdom push a PR.
+# C09, krok 4: build, testy a integracna kontrola pri kazdom PR a push do main.
 #
 # Celu kontrolu robi scripts/ci_check.sh - ten isty skript, aky spusta
 # clovek lokalne. Tento subor iba pripravi prostredie: Python 3.12,
@@ -7,8 +7,11 @@
 
 name: CI
 
+# Push iba do main, inak PR: pri push do vetvy s otvoreným PR by bežali dva
+# rovnaké joby (push aj pull_request). Vetvu bez PR CI nekontroluje.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
