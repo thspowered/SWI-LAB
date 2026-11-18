@@ -11,8 +11,7 @@ vyžadujú.
 Vizuálne pohľady na to isté správanie — diagram prípadov užitia, stavový diagram
 a diagramy aktivít — sú v [docs/diagrams.md](diagrams.md).
 
-**Stav:** baseline **v0.4 — čaká na schválenie** druhým členom tímu (časť 11).
-Kým ju neschvália obaja, platnou schválenou baseline je **v0.3**.
+**Stav:** baseline v0.4 — schválená tímom 2026-11-18 (časť 11).
 v0.4 zavádza požiadavku `CR-08`: žiadosť o schválenie má **lehotu na
 rozhodnutie 48 hodín od podania** (BR-08). Analýza dopadu, varianty a
 rozhodnutie sú v [intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08).
@@ -290,7 +289,7 @@ svojom začiatku (REQ-06).
 **Hranica** je rovnako ostrá ako všade inde: v okamihu termínu rozhodnutia už
 žiadosť neplatí. Podanie + 47:59:59 → živá; podanie + 48:00:00 → vypršaná.
 
-**Žiadosti spred v0.4** okamih podania zaznamenaný nemajú. Ich termínom
+**Žiadosti spred v0.4** termín rozhodnutia zaznamenaný nemajú (od v0.4 sa ukladá termín, nie okamih podania — `DD-8`). Ich termínom
 rozhodnutia je ich `starts_at` — správajú sa presne ako vo v0.2. Pravidlo sa
 spätne nemení: žiadosť nesmie prepadnúť podľa pravidla, ktoré pri jej podaní
 neplatilo.
@@ -1323,7 +1322,7 @@ o žiadosti). Rozdelenie v0.3 a v0.4 zdôvodňuje `ADR-02`.
 | Člen          | Rola pri baseline v0.4                                                | Stav          |
 | ------------- | ----------------------------------------------------------------------- | ------------- |
 | Tomáš Krišica | prepis špecifikácie a diagramov podľa analýzy dopadu `CR-08`             | ✅ 2026-11-15  |
-| Tomáš Hrubý   | review pred integráciou — PR so špecifikáciou v0.4                       | **čaká** — reviewer pri schválení zapíše ✅ a dátum |
+| Tomáš Hrubý   | review pred integráciou ([PR #14](https://github.com/thspowered/SWI-LAB/pull/14)) | ✅ 2026-11-18  |
 
 Analýza dopadu, varianty a peer-reviewed rozhodnutie `ACCEPT` sú v
 [docs/intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08)
@@ -1332,4 +1331,4 @@ Analýza dopadu, varianty a peer-reviewed rozhodnutie `ACCEPT` sú v
 ju obaja schvália **pred** implementáciou. Kód `CR-08` preto ide v samostatnom
 PR, ktorý nadväzuje na tento a do `main` sa smie dostať až po jeho schválení.
 
-**Kým v0.4 nie je schválená, platnou baseline je v0.3.**
+**v0.4 je schválená 2026-11-18.** Kód `CR-08` vznikol v PR #15 súbežne so špecifikáciou, teda **pred** jej schválením; podmienka ACCEPT (4) z C08 je preto dodržaná na úrovni integrácie — kód sa do `main` dostane až po tomto schválení —, nie na úrovni písania. Review špecifikácie zmenilo iba formuláciu BR-08 o žiadostiach spred v0.4, nie správanie, takže kód úpravu nepotreboval.
