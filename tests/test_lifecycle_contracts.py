@@ -22,9 +22,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
-from swilab.domain.states import ReservationState, UserRole
+from swilab.domain import rules
+from swilab.domain.states import InstrumentCategory, ReservationState, UserRole
 from swilab.domain.transitions import (
     Decision,
     cancel_decision,
@@ -132,7 +133,9 @@ def test_cancel_carries_out_exactly_the_policy_decision(
     reservation = make_reservation(
         make_instrument(), owner, starts_at, starts_at + HOUR, state=state
     )
-    decision = cancel_decision(state, starts_at, now)
+    decision = cancel_decision(
+        state, starts_at, now, decision_deadline=reservation.decision_deadline
+    )
 
     result = None
 
@@ -231,7 +234,9 @@ def test_expiry_refuses_a_decision_it_cannot_carry_out(
     """To iste pre tretieho vykonavatela: expire_request_if_dead() vie
     zapisat iba EXPIRED. Iny ciel nesmie potichu zapisat ako vyprsanie."""
     monkeypatch.setattr(
-        service, "expiry_decision", lambda *args: Decision(target=S.CANCELLED)
+        service,
+        "expiry_decision",
+        lambda *args, **kwargs: Decision(target=S.CANCELLED),
     )
     reservation = service._lock_reservation(session, draft.id)
 
@@ -568,7 +573,12 @@ def test_liveness_in_the_overlap_query_agrees_with_the_policy(
         instrument, make_user(), starts_at, starts_at + HOUR, state=S.PENDING_APPROVAL
     )
 
-    expired = expiry_decision(S.PENDING_APPROVAL, starts_at, now).target is S.EXPIRED
+    expired = (
+        expiry_decision(
+            S.PENDING_APPROVAL, starts_at, now, decision_deadline=starts_at
+        ).target
+        is S.EXPIRED
+    )
     availability = service.check_availability(
         session,
         instrument_id=instrument.id,
@@ -578,3 +588,218 @@ def test_liveness_in_the_overlap_query_agrees_with_the_policy(
     )
 
     assert availability.available is expired
+
+
+# =========================================================================
+# BR-08 v0.4 - termin rozhodnutia (CR-08, DD-8, DD-9)
+#
+# Ocakavania zo specifikacie v0.4 a z navrhu C09, zapisane PRED kodom.
+# =========================================================================
+
+DAY = timedelta(days=1)
+
+
+def _deadline_as_seen_by_another_connection(new_session, reservation_id):
+    with new_session() as other:
+        return other.get(Reservation, reservation_id).decision_deadline
+
+
+def _request_ready_to_submit(make_instrument, make_user, make_certification,
+                             make_reservation, starts_at, *, requires_approval=True):
+    """DRAFT na pristroji so schvalovanim, vlastnik ma platny certifikat."""
+    owner = make_user()
+    make_certification(owner, InstrumentCategory.MICROSCOPE, starts_at + 30 * DAY)
+    instrument = make_instrument(requires_approval=requires_approval)
+    draft = make_reservation(instrument, owner, starts_at, starts_at + HOUR)
+    return draft, owner, instrument
+
+
+@pytest.mark.parametrize(
+    ("starts_in", "deadline_from_now"),
+    [
+        (5 * DAY, 48 * HOUR),
+        (DAY, DAY),
+    ],
+    ids=["lehota-48h", "AC-05-starts_at-skor"],
+)
+def test_guard_records_the_decision_deadline_when_a_request_is_submitted(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, now, starts_in, deadline_from_now,
+):
+    """DD-8: vstup do PENDING_APPROVAL zapise termin rozhodnutia =
+    min(podanie + 48 h, starts_at) - commitnuty, viditelny inemu spojeniu."""
+    draft, owner, _ = _request_ready_to_submit(
+        make_instrument, make_user, make_certification, make_reservation,
+        now + starts_in,
+    )
+
+    service.confirm_reservation(
+        session, reservation_id=draft.id, requested_by=owner.id, now=now
+    )
+
+    assert _persisted_state(new_session, draft.id) is S.PENDING_APPROVAL
+    assert (
+        _deadline_as_seen_by_another_connection(new_session, draft.id)
+        == now + deadline_from_now
+    )
+
+
+def test_a_direct_confirmation_has_no_decision_deadline(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, now,
+):
+    """REQ-10 v0.4: pri CONFIRMED termin rozhodnutia neexistuje."""
+    draft, owner, _ = _request_ready_to_submit(
+        make_instrument, make_user, make_certification, make_reservation,
+        now + 5 * DAY, requires_approval=False,
+    )
+
+    service.confirm_reservation(
+        session, reservation_id=draft.id, requested_by=owner.id, now=now
+    )
+
+    assert _persisted_state(new_session, draft.id) is S.CONFIRMED
+    assert _deadline_as_seen_by_another_connection(new_session, draft.id) is None
+
+
+def test_approval_keeps_the_deadline_as_a_record(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, now,
+):
+    """DD-9: termin sa po rozhodnuti nemaze - ostava zaznamom, dokedy sa
+    malo rozhodnut."""
+    draft, owner, _ = _request_ready_to_submit(
+        make_instrument, make_user, make_certification, make_reservation,
+        now + 5 * DAY,
+    )
+    service.confirm_reservation(
+        session, reservation_id=draft.id, requested_by=owner.id, now=now
+    )
+    supervisor = make_user(role=UserRole.SUPERVISOR)
+
+    service.decide_reservation(
+        session, reservation_id=draft.id, requested_by=supervisor.id,
+        approve=True, now=now + HOUR,
+    )
+
+    assert _persisted_state(new_session, draft.id) is S.CONFIRMED
+    assert _deadline_as_seen_by_another_connection(new_session, draft.id) == now + 48 * HOUR
+
+
+def test_rejected_submission_records_no_deadline(
+    session, new_session, make_instrument, make_user, make_certification,
+    make_reservation, now,
+):
+    """Zamietnute podanie (OVERLAP) nezapise nic - ani termin."""
+    draft, owner, instrument = _request_ready_to_submit(
+        make_instrument, make_user, make_certification, make_reservation,
+        now + 5 * DAY,
+    )
+    make_reservation(
+        instrument, make_user(), draft.starts_at, draft.ends_at, state=S.CONFIRMED
+    )
+
+    outcome = _outcome(
+        lambda: service.confirm_reservation(
+            session, reservation_id=draft.id, requested_by=owner.id, now=now
+        )
+    )
+
+    assert outcome is ErrorCode.OVERLAP
+    session.rollback()
+    assert _persisted_state(new_session, draft.id) is S.DRAFT
+    assert _deadline_as_seen_by_another_connection(new_session, draft.id) is None
+
+
+@pytest.mark.parametrize("deadline_in", [TICK, timedelta(0)])
+def test_liveness_agrees_with_the_policy_at_the_48h_boundary(
+    session, make_instrument, make_user, make_reservation, deadline_in,
+):
+    """DD-8: obe formy zivosti su jedine porovnanie s tym istym stlpcom.
+    Na hranici 48 h - so zaciatkom o niekolko dni - musia odpovedat rovnako."""
+    now = datetime.now(UTC)
+    starts_at = now + 5 * DAY
+    instrument = make_instrument(requires_approval=True)
+    make_reservation(
+        instrument, make_user(), starts_at, starts_at + HOUR,
+        state=S.PENDING_APPROVAL, decision_deadline=now + deadline_in,
+    )
+
+    expired = (
+        expiry_decision(
+            S.PENDING_APPROVAL, starts_at, now, decision_deadline=now + deadline_in
+        ).target
+        is S.EXPIRED
+    )
+    availability = service.check_availability(
+        session, instrument_id=instrument.id,
+        starts_at=starts_at, ends_at=starts_at + HOUR, now=now,
+    )
+
+    assert availability.available is expired
+
+
+@pytest.mark.parametrize(
+    ("deadline", "case"),
+    [
+        (None, "CA-6: ziadost bez terminu"),
+        ("po_zaciatku", "DD-9: termin po starts_at"),
+    ],
+)
+def test_the_database_refuses_a_request_that_breaks_dd9(session, now, deadline, case):
+    """DD-9 chrani aj priamy SQL zapis - presne cestu, ktoru API kontrola
+    nezachyti (inventar zapisovatelov z C08)."""
+    instrument_id, user_id, reservation_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    starts_at = now + 5 * DAY
+    session.execute(
+        text(
+            "INSERT INTO instruments (id, name, category, location, is_active, "
+            "requires_approval) VALUES (:i, 'X', 'MICROSCOPE', 'L', true, true)"
+        ),
+        {"i": instrument_id},
+    )
+    session.execute(
+        text(
+            "INSERT INTO users (id, full_name, email, role) "
+            "VALUES (:u, 'X', 'x@swi-lab.local', 'STUDENT')"
+        ),
+        {"u": user_id},
+    )
+    session.commit()
+    value = None if deadline is None else starts_at + HOUR
+
+    with pytest.raises(IntegrityError):
+        session.execute(
+            text(
+                "INSERT INTO reservations (id, instrument_id, user_id, starts_at, "
+                "ends_at, state, created_at, decision_deadline) VALUES "
+                "(:r, :i, :u, :s, :e, 'PENDING_APPROVAL', :c, :d)"
+            ),
+            {"r": reservation_id, "i": instrument_id, "u": user_id,
+             "s": starts_at, "e": starts_at + HOUR, "c": now, "d": value},
+        )
+    session.rollback()
+
+
+def test_changing_the_period_does_not_move_an_existing_deadline(
+    session, new_session, monkeypatch, make_instrument, make_user,
+    make_certification, make_reservation, now,
+):
+    """AC-10: zmena T sa tyka iba ziadosti podanych po nej. Ziadost podana
+    pri T = 48 h sa da schvalit aj vtedy, ked by pri novom T uz vyprsala."""
+    draft, owner, _ = _request_ready_to_submit(
+        make_instrument, make_user, make_certification, make_reservation,
+        now + 5 * DAY,
+    )
+    service.confirm_reservation(
+        session, reservation_id=draft.id, requested_by=owner.id, now=now
+    )
+    monkeypatch.setattr(rules, "DECISION_PERIOD", HOUR)
+    supervisor = make_user(role=UserRole.SUPERVISOR)
+
+    service.decide_reservation(
+        session, reservation_id=draft.id, requested_by=supervisor.id,
+        approve=True, now=now + 2 * HOUR,
+    )
+
+    assert _persisted_state(new_session, draft.id) is S.CONFIRMED

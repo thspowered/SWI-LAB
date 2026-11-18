@@ -133,18 +133,43 @@ def make_certification(session):
     return _make
 
 
+_UNSET = object()
+
+
 @pytest.fixture
 def make_reservation(session):
+    """Rezervacia zapisana priamo do databazy, v pozadovanom stave.
+
+    `decision_deadline` (BR-08 v0.4, DD-8): pri PENDING_APPROVAL je
+    predvolene `starts_at` - ziadost, ktorej termin rozhodnutia je jej
+    zaciatok. Taku ma ziadost spred v0.4 (AC-09) aj ziadost podana menej
+    nez 48 h pred zaciatkom (AC-05), takze testy pisane pre v0.2 si
+    zachovavaju svoj vyznam. Testy lehoty 48 h ho zadavaju vyslovne.
+    Pri inych stavoch je predvolene None. Priamy zapis musi splnit
+    obmedzenie DD-9 rovnako ako aplikacia - fixture ho neobchadza.
+    """
     from swilab.domain.states import ReservationState
     from swilab.models import Reservation
 
-    def _make(instrument, user, starts_at, ends_at, state=ReservationState.DRAFT):
+    def _make(
+        instrument,
+        user,
+        starts_at,
+        ends_at,
+        state=ReservationState.DRAFT,
+        decision_deadline=_UNSET,
+    ):
+        if decision_deadline is _UNSET:
+            decision_deadline = (
+                starts_at if state == ReservationState.PENDING_APPROVAL else None
+            )
         reservation = Reservation(
             instrument_id=instrument.id,
             user_id=user.id,
             starts_at=starts_at,
             ends_at=ends_at,
             state=state,
+            decision_deadline=decision_deadline,
         )
         session.add(reservation)
         session.commit()

@@ -1,4 +1,4 @@
-"""HTTP vrstva nad piatimi operaciami (baseline v0.2). Tenka: parsuje vstup, odcita cas,
+"""HTTP vrstva nad piatimi operaciami (baseline v0.4). Tenka: parsuje vstup, odcita cas,
 zavola sluzbu a prelozi vysledok.
 
 Ziadne business pravidlo tu nesmie vzniknut - ak by tu bolo, specifikacia
@@ -46,6 +46,10 @@ class ReservationResponse(BaseModel):
     starts_at: datetime
     ends_at: datetime
     state: str
+    #: REQ-10 v0.4, AC-06: okamih, do ktoreho musi veduci o ziadosti
+    #: rozhodnut. null, ak rezervacia ziadostou nikdy nebola. Aditivne pole -
+    #: existujuci klienti sa nerozbiju.
+    decision_deadline: datetime | None = None
 
 
 class CancelResponse(ReservationResponse):
@@ -72,6 +76,7 @@ def _to_response(reservation) -> dict:
         "starts_at": reservation.starts_at,
         "ends_at": reservation.ends_at,
         "state": reservation.state.value,
+        "decision_deadline": reservation.decision_deadline,
     }
 
 

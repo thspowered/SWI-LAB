@@ -1,4 +1,4 @@
-# Diagramy — Specification Baseline v0.2
+# Diagramy — Specification Baseline v0.4
 
 Vizuálne pohľady na to isté správanie, ktoré popisuje
 [docs/specification.md](specification.md). Diagramy **nedopĺňajú** nové pravidlá:
@@ -6,7 +6,11 @@ každá podmienka v nich má zodpovedajúce `BR-xx` alebo `REQ-xx` v texte. Ak s
 niekedy rozídu, rozpor sa rieši opravou oboch, nie prekreslením obrázka.
 
 Prvky pridané zmenou v0.2 (schvaľovací proces) sú v texte pod diagramami
-označené *(v0.2)*.
+označené *(v0.2)*, zmeny z v0.4 (`CR-08`, lehota na rozhodnutie o žiadosti)
+*(v0.4)*. v0.4 mení v diagramoch iba podmienku živosti žiadosti: namiesto
+„nastal `starts_at`" platí „uplynul **termín rozhodnutia**" — skorší
+z okamihov *podanie + 48 h* a `starts_at` (BR-08). Stavy ani prechody
+nepribudli.
 
 ---
 
@@ -20,7 +24,7 @@ flowchart LR
     supervisor(("Vedúci<br/>laboratória"))
     notif(("Notification<br/>Service"))
 
-    subgraph SYS["Systém SWI-LAB — baseline v0.2"]
+    subgraph SYS["Systém SWI-LAB — baseline v0.4"]
         direction TB
         op1(["OP-01<br/>Vytvoriť rezerváciu"])
         op2(["OP-02<br/>Zistiť dostupnosť"])
@@ -85,7 +89,7 @@ stateDiagram-v2
 
     PENDING_APPROVAL --> CONFIRMED : approve [supervisor ∧ podmienky stále platia]
     PENDING_APPROVAL --> REJECTED : reject [supervisor]
-    PENDING_APPROVAL --> EXPIRED : expire [nastal starts_at]
+    PENDING_APPROVAL --> EXPIRED : expire [uplynul termín rozhodnutia]
     PENDING_APPROVAL --> CANCELLED : cancel [žiadosť ešte nevypršala]
 
     CONFIRMED --> CANCELLED : cancel [zostáva viac ako 60 min]
@@ -113,8 +117,10 @@ stateDiagram-v2
 
     note left of EXPIRED
         v0.2. Jediný prechod, ktorý
-        nespúšťa človek - nastal
-        starts_at žiadosti (BR-08).
+        nespúšťa človek - uplynul
+        termín rozhodnutia (BR-08):
+        skorší z podanie + 48 h
+        a starts_at (v0.4).
         Zapíšu ho OP-04 a OP-05.
     end note
 
@@ -131,11 +137,11 @@ stateDiagram-v2
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
 | `[*] → DRAFT`                    | používateľ existuje ∧ prístroj existuje ∧ `is_active` ∧ `ends_at > starts_at` ∧ `now < starts_at`                                              | REQ-01, BR-01/05/06    |
 | `DRAFT → CONFIRMED`              | žiadateľ oprávnený ∧ `now < starts_at` ∧ `is_active` ∧ platný certifikát ∧ žiadny prekryv s blokujúcim stavom ∧ **prístroj nevyžaduje schválenie** | REQ-04, REQ-10, BR-02/04/05/06 |
-| `DRAFT → PENDING_APPROVAL`       | tie isté podmienky ∧ **prístroj vyžaduje schválenie** *(v0.2)*                                                                                | REQ-10, BR-02/04/05/06 |
+| `DRAFT → PENDING_APPROVAL`       | tie isté podmienky ∧ **prístroj vyžaduje schválenie** *(v0.2)*; zaznamená sa termín rozhodnutia = min(`now` + 48 h, `starts_at`) *(v0.4)*            | REQ-10, BR-02/04/05/06/08 |
 | `DRAFT → CANCELLED`              | žiadateľ oprávnený — bez časovej podmienky (nález N-03)                                                                                        | REQ-07, BR-03, BR-06   |
-| `PENDING_APPROVAL → CONFIRMED`   | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now < starts_at` ∧ `is_active` ∧ certifikát vlastníka stále platí ∧ žiadny prekryv *(v0.2)*               | REQ-11, BR-02/04/05/07/08 |
-| `PENDING_APPROVAL → REJECTED`    | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now < starts_at` *(v0.2)*                                                                                | REQ-12, BR-07, BR-08   |
-| `PENDING_APPROVAL → EXPIRED`     | `now >= starts_at`; zapíše sa pri operácii, ktorá záznam číta *(v0.2)*                                                                         | REQ-15, BR-08          |
+| `PENDING_APPROVAL → CONFIRMED`   | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now <` termín rozhodnutia ∧ `is_active` ∧ certifikát vlastníka stále platí ∧ žiadny prekryv *(v0.2, v0.4)* | REQ-11, BR-02/04/05/07/08 |
+| `PENDING_APPROVAL → REJECTED`    | rozhoduje `SUPERVISOR` ≠ vlastník ∧ `now <` termín rozhodnutia *(v0.2, v0.4)*                                                                  | REQ-12, BR-07, BR-08   |
+| `PENDING_APPROVAL → EXPIRED`     | `now >=` termín rozhodnutia; zapíše sa pri operácii, ktorá na žiadosť smeruje (OP-04, OP-05) *(v0.2, v0.4)*                                    | REQ-15, BR-08          |
 | `PENDING_APPROVAL → CANCELLED`   | žiadateľ oprávnený ∧ žiadosť ešte nevypršala (BR-08); 60-minútová lehota tu neplatí *(v0.2)*                                                   | REQ-14, BR-03, BR-06, BR-08 |
 | `CONFIRMED → CANCELLED`          | žiadateľ oprávnený ∧ `now + 60 min < starts_at`                                                                                               | REQ-08, BR-03, BR-06   |
 | `CANCELLED → CANCELLED`          | žiadateľ oprávnený — bez zmeny stavu, bez oznámenia                                                                                           | REQ-09                 |
@@ -208,7 +214,7 @@ flowchart TD
     D -->|"nie"| X2["Zamietni: INVALID_INTERVAL"]
     D -->|"áno"| E{"Prístroj aktívny?<br/>BR-05"}
     E -->|"nie"| R1["UNAVAILABLE<br/>dôvod INSTRUMENT_INACTIVE"]
-    E -->|"áno"| F["Nájdi prekrývajúce sa rezervácie<br/>v blokujúcom stave (BR-01, BR-02):<br/>CONFIRMED, alebo PENDING_APPROVAL<br/>so starts_at v budúcnosti (BR-08)"]
+    E -->|"áno"| F["Nájdi prekrývajúce sa rezervácie<br/>v blokujúcom stave (BR-01, BR-02):<br/>CONFIRMED, alebo PENDING_APPROVAL<br/>pred termínom rozhodnutia (BR-08)"]
     F --> G{"Našla sa aspoň jedna?"}
     G -->|"nie"| R2["AVAILABLE"]
     G -->|"áno"| R3["UNAVAILABLE<br/>dôvod CONFIRMED alebo PENDING_APPROVAL<br/>+ zoznam kolidujúcich id"]
@@ -294,7 +300,7 @@ flowchart TD
     F -->|"CANCELLED"| R1["Úspech bez zmeny stavu<br/>bez oznámenia - REQ-09"]
     F -->|"REJECTED alebo EXPIRED"| X5["Zamietni: INVALID_STATE<br/>koncový stav - REQ-14"]
     F -->|"DRAFT"| G["Bez časovej podmienky<br/>BR-03, nález N-03"]
-    F -->|"PENDING_APPROVAL"| Q{"now < starts_at?<br/>BR-08"}
+    F -->|"PENDING_APPROVAL"| Q{"now < termín<br/>rozhodnutia?<br/>BR-08"}
     F -->|"CONFIRMED"| H{"now + 60 min < starts_at?"}
     Q -->|"nie"| X6["state = EXPIRED<br/>a zamietni - nález N-04"]
     Q -->|"áno"| J["state = CANCELLED"]
@@ -329,9 +335,9 @@ flowchart TD
 Vetva `CONFIRMED` je prísnejšia než vetva `DRAFT` — to je BR-03 a jeho
 zdôvodnenie (potvrdená rezervácia blokuje prístroj ostatným, návrh nie).
 
-Vetva `PENDING_APPROVAL` *(v0.2)* nemá lehotu, ale má kontrolu expirácie: keď
-žiadosti už začal termín, zrušiť sa nedá a systém namiesto toho zapíše
-`EXPIRED` (nález N-04). Je to jediné miesto v OP-04, kde operácia zmení stav
+Vetva `PENDING_APPROVAL` *(v0.2)* nemá lehotu BR-03, ale má kontrolu
+expirácie: keď žiadosti uplynul termín rozhodnutia *(v0.4)*, zrušiť sa nedá
+a systém namiesto toho zapíše `EXPIRED` (nález N-04). Je to jediné miesto v OP-04, kde operácia zmení stav
 **a napriek tomu skončí zamietnutím**.
 
 ### 3.5 OP-05 — Approve Reservation *(v0.2)*
@@ -345,7 +351,7 @@ flowchart TD
     E -->|"nie"| X3["Zamietni: FORBIDDEN"]
     E -->|"áno"| D{"state = PENDING_APPROVAL?"}
     D -->|"nie"| X2["Zamietni: INVALID_STATE<br/>stav sa nemení"]
-    D -->|"áno"| F{"now < starts_at?<br/>BR-08"}
+    D -->|"áno"| F{"now < termín<br/>rozhodnutia?<br/>BR-08"}
     F -->|"nie"| X4["state = EXPIRED<br/>a zamietni - REQ-15"]
     F -->|"áno"| G{"Rozhodnutie?"}
     G -->|"zamietnuť"| R2["state = REJECTED<br/>prístroj sa uvoľní - REQ-12"]
@@ -368,7 +374,7 @@ flowchart TD
     X6 --> Z
     X7 --> Z
 
-    N["Kontroly BR-04, BR-05 a BR-02 sa opakujú,<br/>hoci prebehli už pri podaní žiadosti (OP-03).<br/>Medzitým ubehol čas: certifikát mohol vypršať,<br/>prístroj ísť do servisu, termín obsadiť niekto iný."]
+    N["Kontroly BR-04, BR-05 a BR-02 sa opakujú,<br/>hoci prebehli už pri podaní žiadosti (OP-03).<br/>Medzitým sa mohol zmeniť záznam certifikátu<br/>(BR-04 porovnáva uložené údaje, nie čas - RV-5),<br/>prístroj ísť do servisu, termín obsadiť niekto iný."]
     I -.- N
     J -.- N
 

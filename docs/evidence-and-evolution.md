@@ -1231,8 +1231,14 @@ plán skóre neznižuje.
   nie ako odstránenie príčiny.
 - **Očakávané reziduálne:** L=2, I=2 → MEDIUM (4) pre CP1.
 - **Skutočné reziduálne:** MEDIUM (4) pre CP1 — contingency je vyskúšaná.
-  Pre CP2 **NOT VERIFIED**: rozhodnutie je prijaté, ale kontrola schémy pri
-  štarte ešte nie je implementovaná. Plán opatrenie neznižuje.
+  *(C09)* Kontrola schémy pri štarte je implementovaná a otestovaná
+  (`tests/test_schema_check.py`, mutácie D8, D9); rollback aj návrat vpred
+  `CR-08` raz vyskúšané nad databázou s dátami (evidence C09). Zlyhanie pri
+  zmene schémy je teda skoré a zrozumiteľné, nie `500` pri každej
+  požiadavke. Strata dát pri prestavbe ostáva (bez volume, `ADR-02`).
+  Pre CP2 **MEDIUM (4) — overené**; potvrdil owner T. Hrubý v review PR #15
+  (2026-11-18). Overené testami a skúškou rollbacku, nie čistým checkoutom —
+  v ňom pytest schému najprv prestaví, takže kontrolu pri štarte nespustí.
 - **Prijatie:** Tomáš Hrubý pre CP1.
 - **Monitoring / trigger:** akákoľvek zmena v `models.py`. Po `ADR-02`
   pribúda spúšťač na prehodnotenie celého rozhodnutia: `volumes:` pre databázu
@@ -1275,9 +1281,15 @@ plán skóre neznižuje.
   potvrdenie po lehote, potom schválenie so starším `now` → `OVERLAP` — v C09.
   Dnes tento súbeh nepokrýva žiadny test (C08, *Súbeh*). Owner: tím (kto
   implementuje C09).
-- **Dôkaz účinnosti:** žiadny — **PLANNED**.
+- **Dôkaz účinnosti:** *(C09)* `test_approval_with_an_older_now_meets_a_newer_request`
+  — potvrdenie `B` s `now` v termíne rozhodnutia žiadosti `A`, potom schválenie
+  `A` so starším `now` o sekundu skôr → `OVERLAP`, `A` ostáva
+  `PENDING_APPROVAL`, BR-02 drží. Mutácia D3 (SQL forma živosti podľa
+  `starts_at`) ho zhodí. Stav: **overené**.
 - **Očakávané reziduálne:** L=1, I=1 → LOW (1).
-- **Skutočné reziduálne:** **NOT VERIFIED.**
+- **Skutočné reziduálne:** **LOW (1) — overené** testom vyššie. Sémantický
+  posun (operácia čakajúca na zámok sa posúdi podľa času príchodu) ostáva
+  vlastnosťou systému, ako ho prijalo `CA-3`; BR-02 ním ohrozené nie je.
 - **Prijatie:** návrh T. Hrubý, potvrdzuje peer review CR-08 (CA-3).
 - **Monitoring / trigger:** druhá inštancia aplikácie (každá s vlastnými
   hodinami); meranie čakania na zámok prístroja (I-02).
@@ -1785,3 +1797,344 @@ záznamu (opravené po nezávislej kontrole):
 ten je jadrom rizika `R-06` pri CR-08. C09 ho overí testom na úrovni služby
 s explicitným `now` (poradie sa dá určiť priamo, bariéra netreba). Pre CR-08
 sú testy vyššie regresnými testami AC-07.
+
+---
+
+## C09 — Integrácia, CI a reprodukovateľný release
+
+C09 sa delí na dve časti, ktoré na sebe nezávisia:
+
+- **vetva A** (tento oddiel) — automatizácia a identita release: zamknuté
+  závislosti, jeden kontrolný skript, CI pri PR a push do `main`, reprodukovateľný
+  artefakt. **Kód aplikácie sa nemení.**
+- **vetva B** — samotná zmena `CR-08` podľa ohraničenej delty z C08
+  ([intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08)).
+
+Záznam C09 podľa šablóny zo zadania je v [README, časť C09](../README.md#c09--integration-ci-and-release-record).
+
+### Vetva A — zamknuté závislosti
+
+**Prečo.** `pyproject.toml` uvádza iba spodné hranice. Ten istý commit tak
+dával na rôznych strojoch a v rôznych dňoch iný produkt — evidence C08 to
+priznávala ako obmedzenie reprodukovateľnosti. Pri príprave locku sa ukázalo,
+ako rýchlo sa to deje:
+
+| Balíček | T. Hrubý, C08 (2026-11-15) | T. Krišica, obnovenie C08 (2026-11-15) | čistá inštalácia, C09 (2026-11-15) |
+| ------- | -------------------------- | -------------------------------------- | ---------------------------------- |
+| FastAPI | 0.141.1 | 0.142.2 | **0.163.1** |
+| SQLAlchemy | 2.0.52 | 2.1.3 | **2.1.8** |
+| psycopg | 3.3.5 | 3.3.6 | **3.3.9** |
+| pydantic | 2.13.5 | 2.13.5 | **2.14.3** |
+
+Tri prostredia, tri rôzne produkty — a všetky tri hlásili `253 passed`.
+Zelená sada bez locku teda nehovorí, **na čom** bola zelená.
+
+**Ako lock vznikol.** Z čistého venv (Python 3.12.13), nie z vývojárskeho
+prostredia: to obsahovalo nástroje, ktoré projekt nedeklaruje (`python-pptx`,
+`pillow`, `lxml`, `xlsxwriter` — z práce na prezentáciách), a `pip freeze`
+by ich zapísal do identity produktu.
+
+| Súbor | Obsah | Použitie |
+| ----- | ----- | -------- |
+| `requirements.lock` | 24 runtime balíčkov | identita produktu v RC manifeste |
+| `requirements-dev.lock` | 35 balíčkov: runtime + `pytest`, `httpx` + `build`, `setuptools` | CI, čistý checkout, `ci_check.sh` |
+
+Runtime lock je vygenerovaný s obmedzením na dev lock, takže verzie spoločných
+balíčkov sú v oboch súboroch rovnaké (overené `comm`).
+
+**Overenie na zamknutých verziách** — pred zamknutím, nie po ňom:
+
+| Kontrola | Výsledok |
+| -------- | -------- |
+| `pytest -q` | `253 passed` |
+| `PGTZ=Europe/Prague pytest -q` | `253 passed` |
+| `scripts/mutation_check.py` | 34 mutácií, 0 prežilo |
+| `scripts/c08_baseline_tc.py` proti bežiacej aplikácii | `TC-C08-01..03` 3× `PASS`, návratový kód `0` |
+
+Projekt teda funguje aj na verziách o dvadsať minor verzií FastAPI novších,
+než na akých vznikol — a od tohto commitu sa už nezmenia bez zmeny locku.
+
+### Vetva A — jeden kontrolný skript
+
+`scripts/ci_check.sh` je **jediný** popis toho, čo sa kontroluje. Spúšťa ho
+CI aj človek lokálne, takže „zelené v CI" a „zelené u mňa" znamenajú to isté.
+
+| Krok | Čo robí | Prečo |
+| ---- | ------- | ----- |
+| 1/6 identita behu | commit, Python, systém; **každá zamknutá verzia musí byť nainstalovaná presne** | zelená na iných verziách by nič nedokazovala |
+| 2/6 `pytest` | celá sada proti PostgreSQL | jednotkové, komponentové a súbehové testy |
+| 3/6 `pytest` pri `PGTZ=Europe/Prague` | tá istá sada pri inom pásme klienta | trvalá ochrana nálezu F-01 — predtým sa to overilo raz a ručne |
+| 4/6 mutácie | 34 vložených chýb musí sada zachytiť | zelená sada, ktorá nič nezachytí, je bezcenná |
+| 5/6 `TC-C08-01..03` | aplikácia sa spustí, test cases idú cez HTTP, stav sa číta novým spojením priamo z databázy | **skutočná integračná hranica** HTTP → aplikácia → PostgreSQL, ktorú zadanie C09 žiada |
+| 6/6 artefakt | wheel + SHA256 do `dist/SHA256SUMS` | identita produktu (krok 6 zadania) |
+
+Návratový kód `0` iba vtedy, keď prejdú všetky kroky; inak skript skončí na
+prvom zlyhanom kroku a vypíše ktorý.
+
+**Lokálny beh — prostredie nainštalované presne ako v CI.** Nový venv,
+`pip install -r requirements-dev.lock`, `pip install --no-deps --no-build-isolation -e .`:
+
+| Položka | Hodnota |
+| ------- | ------- |
+| Commit | `35d684f` |
+| Prostredie | Python 3.12.13, Darwin arm64, PostgreSQL 16.13 z `docker-compose.yml` |
+| Príkaz | `PYTHON=<venv>/bin/python scripts/ci_check.sh` |
+| Výsledok | návratový kód **`0`**, `VSETKY KROKY PRESLI` |
+| Kroky | lock 35/35 · `253 passed` · `253 passed` (Prague) · 34/34 · `TC-C08-01..03` PASS · wheel |
+| Artefakt | `swilab-0.2.0-py3-none-any.whl`, SHA256 `a4e80878b4a7384381e6cfdc6c5313b98e4d6dc1f7aba910d1545bb161fb7592` |
+
+**Negatívna kontrola — skript musí odmietnuť prostredie mimo locku.** Ten istý
+skript spustený vo vývojárskom `.venv` (SQLAlchemy 2.1.3 namiesto 2.1.8 a
+ďalších 14 rozdielov):
+
+```text
+  sqlalchemy: zamknute 2.1.8, nainstalovane 2.1.3
+  starlette: zamknute 1.10.0, nainstalovane 1.7.0
+  ...
+prostredie nezodpoveda requirements-dev.lock
+
+ZLYHANIE v kroku: 1/6 identita behu (navratovy kod 1)
+```
+
+Skript sa k testom nedostal. Zelená na nesprávnych verziách teda nemôže vzniknúť.
+
+### Vetva A — reprodukovateľný artefakt
+
+Wheel obsahuje iba balík `swilab` (15 modulov) a metadáta — žiadne testy,
+skripty ani dokumenty. Zostavuje sa s dvoma nastaveniami:
+
+- `SOURCE_DATE_EPOCH` = čas commitu — časové značky v archíve nezávisia od
+  okamihu zostavenia,
+- `--no-isolation` — použije sa `setuptools` z locku, nie najnovší z PyPI.
+
+| Pokus | SHA256 |
+| ----- | ------ |
+| `2a6f615`, beh 1, so `SOURCE_DATE_EPOCH` | `c8e606fd…ee80f02` |
+| `2a6f615`, beh 2, so `SOURCE_DATE_EPOCH` | `c8e606fd…ee80f02` — **zhodný** |
+| `2a6f615`, beh 3, bez `SOURCE_DATE_EPOCH` | `f06f7dcf…ad46e6c5` — iný |
+
+Ten istý commit dá **bajtovo ten istý wheel**. Hash je teda identita, ktorú
+môže ktokoľvek overiť zostavením zo zdroja — nie iba číslo, ktoré niekto
+vypísal. Metadáta wheelu (`Requires-Dist`) obsahujú spodné hranice z
+`pyproject.toml`; presné verzie prostredia určuje `requirements.lock`.
+
+### Vetva A — CI
+
+`.github/workflows/ci.yml`, pri každom PR a push do `main`: Ubuntu, Python 3.12,
+PostgreSQL 16 ako service kontajner na porte 5433 (rovnako ako
+`docker-compose.yml`, takže `DATABASE_URL` je všade rovnaká), závislosti
+z `requirements-dev.lock`, potom `scripts/ci_check.sh` a wheel ako artefakt
+behu.
+
+Heslo v `ci.yml` je heslo vývojového kontajnera z `docker-compose.yml`,
+nie tajomstvo — rovnaké ako na miestach, ktoré vymenúva krok 0 v C08.
+
+**Prvý beh CI** — [run 43767331765](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765),
+udalosť `push`, commit `35d684f` — ten istý commit ako lokálny beh vyššie,
+pushnutý samostatne práve kvôli tomuto porovnaniu:
+
+| Položka | Lokálne (T. Krišica) | CI |
+| ------- | -------------------- | -- |
+| Systém | Darwin arm64 | Linux x86_64 (`ubuntu-latest`) |
+| Python | 3.12.13 | 3.12.16 |
+| PostgreSQL | 16.13 | 16.16 |
+| Lock | 35/35 v zamknutej verzii | 35/35 v zamknutej verzii |
+| `pytest` / pri `PGTZ=Europe/Prague` | `253 passed` / `253 passed` | `253 passed` / `253 passed` |
+| Mutácie | 34, 0 prežilo | 34, 0 prežilo |
+| `TC-C08-01..03` | 3× `PASS` | 3× `PASS` |
+| Výsledok | návratový kód `0` | `success` |
+| **SHA256 wheelu** | `a4e80878b4a7384381e6cfdc6c5313b98e4d6dc1f7aba910d1545bb161fb7592` | **`a4e80878b4a7384381e6cfdc6c5313b98e4d6dc1f7aba910d1545bb161fb7592`** |
+
+**Hash je zhodný naprieč operačným systémom, architektúrou aj patch verziou
+Pythonu.** Reprodukovateľnosť artefaktu teda nie je vlastnosť jedného stroja:
+ktokoľvek, kto zostaví commit `35d684f` podľa `ci_check.sh`, dostane ten istý
+súbor — a môže to overiť porovnaním s artefaktom behu CI.
+
+Lock pritom nedrží verziu Pythonu ani Postgresu na patch úrovni (3.12.13 vs.
+3.12.16, 16.13 vs. 16.16) a výsledok sa nezmenil. Je to obmedzenie, ktoré
+zostáva — pozri nižšie.
+
+### Vetva A — čo nedokazuje
+
+- **Kód aplikácie sa nezmenil.** CI dnes overuje baseline pred `CR-08`.
+  Novú požiadavku overí až vetva B — vtedy `TC-C08-03` podľa očakávania
+  zmení výsledok a skript treba upraviť (krok 3 delty z C08).
+- **Python a PostgreSQL sú zamknuté iba na minor verzii** (`3.12`, `postgres:16`).
+  Prvý beh CI prebehol na iných patch verziách než lokálny a dal rovnaký
+  výsledok aj hash — ale to je pozorovanie, nie záruka.
+- **Lock neobsahuje hashe balíčkov** a nezachováva platformové značky:
+  `uvloop` a `httptools` sa neinštalujú na Windows. Platí pre Linux a macOS,
+  na ktorých tím a CI bežia.
+- **Verzia balíčka je stále `0.2.0`.** Či bude `0.4.0` (zhoda so špecifikáciou
+  v0.4), alebo sa číslovanie rozpojí, je otvorené rozhodnutie pre vetvu B.
+- **Nezávislý čistý checkout** druhým členom (krok 5 zadania) ešte neprebehol.
+  Lokálny beh vyššie robil autor tejto vetvy na vlastnom stroji.
+
+### Vetva B — implementácia `CR-08` (kroky 2 a 3 zadania C09)
+
+**Rozhodnutie z C08:** [CR-08](intent-and-change.md#c08--controlled-change-cr-08),
+`ACCEPT`, varianta A so zmenou `CA-5`, peer review PR #11. Podmienky ACCEPT:
+(1)(2) review, (3) migrácie — `ADR-02`, (4) špecifikácia v0.4 — PR #14,
+**schválená 2026-11-18** (review T. Hrubého). Kód vznikol súbežne so
+špecifikáciou, teda pred jej schválením; podmienka (4) je dodržaná na úrovni
+integrácie, nie písania. Kód preto ide v samostatnom PR, ktorý nadväzuje na
+PR #14 a do `main` sa smie dostať až po jeho schválení.
+
+**Ohraničená delta z C08 → čo vzniklo:**
+
+| Krok delty (C08) | Kde | Commit |
+| ---------------- | --- | ------ |
+| 1. špecifikácia v0.4 a diagramy (vrátane RV-5) | PR #14 | `5268785` |
+| 2. architektúra a detailný návrh — `DD-8`, `DD-9`, signatúry C05 | PR #14 | `5268785`, `0a8a723` |
+| 3. testy, ktoré najprv padnú; nové Expected `TC-C08-03`; oracle v0.4 | PR #15 | `8ce4035` |
+| 4. kód — stĺpec, obmedzenie, termín, politika, SQL, API, kontrola schémy | PR #15 | `9ede5a6` |
+| 5. mutácie — upravené texty + D1–D11 | PR #15 | `9ede5a6` |
+| 6. evidence, README, verzia `0.4.0`, postup rollbacku | PR #15 | tento commit a nasledujúce |
+
+**Expected pred kódom.** Testy a nové Expected `TC-C08-03` sú v commite
+`8ce4035` *(pôvodne `5beac73`; hash sa zmenil presadením na opravený návrh
+v PR #14, testy sú totožné a dátum autora pôvodný)*. Beh na ňom, pred kódom:
+**`218 failed, 82 passed, 10 errors`**. Po kóde (`9ede5a6`), bez zmeny
+jediného testu: **`310 passed`** — 253 pôvodných a 57 nových.
+
+**Nové správanie — test basis z C08 a skutočný výsledok** (príkaz
+`scripts/ci_check.sh`, commit `fe28bed`, PostgreSQL 16 z `docker-compose.yml`):
+
+| Test ID | Prijatý oracle | Úroveň a kde | Expected | Actual | Verdikt |
+| ------- | -------------- | ------------ | -------- | ------ | ------- |
+| AC-01, AC-04 | BR-08 v0.4, REQ-11 | služba: `test_approval_at_the_48h_boundary[AC-01-47:59:59]` | `CONFIRMED` | `CONFIRMED`, uložené | PASS |
+| AC-02, AC-04 | BR-08 v0.4, REQ-15 | služba: `…[AC-02-48:00:00]`, `test_late_rejection_expires_and_a_repeat_is_invalid_state` | `EXPIRED` + zápis; druhý pokus `INVALID_STATE` | rovnako | PASS |
+| AC-03 | BR-08, REQ-03, REQ-04 | služba: `test_request_past_its_deadline_frees_the_instrument`; HTTP: `TC-C08-03` kroky 3–4 | po termíne `AVAILABLE`, prekryv sa dá potvrdiť | rovnako | PASS |
+| AC-05 | BR-08 v0.4 | služba: `test_request_submitted_shortly_before_start_expires_at_start` | termín = `starts_at` | rovnako | PASS |
+| AC-06 | REQ-10 v0.4 | HTTP: `test_http_confirm_of_a_request_returns_its_decision_deadline`, `…never_was_a_request_has_no_deadline` | termín = podanie + 48 h; inak `null` | rovnako | PASS |
+| AC-07 | BR-02, R-06 | služba: `test_approval_with_an_older_now_meets_a_newer_request`; súbehové testy REQ-05, REQ-16 | `OVERLAP`, BR-02 drží | rovnako | PASS |
+| AC-08 | celá sada v0.2 | 253 pôvodných testov | prejdú | `253` z nich prejde | PASS |
+| AC-09 | BR-08 v0.4 | služba: `test_a_request_from_before_v04_behaves_as_in_v02`; rollback skúška krok 6 | správanie v0.2 | rovnako | PASS |
+| AC-10 | BR-08 v0.4 | komponent: `test_changing_the_period_does_not_move_an_existing_deadline` | termín sa nehýbe | rovnako | PASS |
+| REQ-15 | oprávnenie pred vypršaním | služba: `test_authorization_wins_over_expiry[lehota|starts_at]` | `FORBIDDEN`, stav bez zmeny | rovnako | PASS |
+| DD-9 | obmedzenie | komponent: `test_the_database_refuses_a_request_that_breaks_dd9` | `IntegrityError` | rovnako | PASS |
+| ADR-02 | kontrola schémy | `tests/test_schema_check.py` | každý druh rozdielu nájdený, štart odmietnutý | rovnako | PASS |
+| `TC-C08-01` | BR-02, REQ-11 — regresia | HTTP → aplikácia → PostgreSQL, stav novým spojením | ako na baseline | ako na baseline | PASS |
+| `TC-C08-02` | BR-02, REQ-04 — regresia | tamtiež | ako na baseline | ako na baseline | PASS |
+| `TC-C08-03` | **oracle CR-08** — Expected z C08, zapísané pred kódom | tamtiež | `AVAILABLE`; `B2 → PENDING_APPROVAL` s termínom; `409 EXPIRED`; `B1 EXPIRED` | rovnako | PASS |
+
+**Nález počas prvého behu — chyba v návrhu test casu, nie v aplikácii.**
+Prvý beh `ci_check.sh` na `9ede5a6`: `TC-C08-03` prešiel v oboch behoch
+všetkými šiestimi krokmi, ale verdikt bol FAIL — porovnanie dvoch behov po
+resete hlásilo rozdiel. Krok 4 zapisoval do pozorovania aj hodnotu termínu
+z odpovede API, ktorá závisí od skutočných hodín servera
+(`22:51:31.100326Z` vs. `22:51:31.133303Z`). Oprava `fe28bed` mení iba
+**záznam** pozorovania (termín *je / nie je* v odpovedi); Expected ani
+kritérium kroku sa nemenia. Presnú hodnotu overuje pytest test pre AC-06.
+
+**Kontrolný beh — nový oracle nie je prázdny.** Aplikácia s vloženou chybou
+D3 (SQL forma živosti podľa `starts_at`), port 8001:
+`TC-C08-01 PASS`, `TC-C08-02 PASS`, **`TC-C08-03 FAIL`** — krok 3
+`UNAVAILABLE PENDING_APPROVAL ['B1']`, krok 4 `409 OVERLAP`, krok 6
+`B2 DRAFT`. Návratový kód `1`. Regresné test cases od termínu nezávisia,
+preto prešli — správne.
+
+**Mutácie: 45, žiadna neprežila.** Nové D1–D11, každá zachytená testami,
+pre ktoré vznikla:
+
+| Mutácia | Zachytené |
+| ------- | --------- |
+| D1 lehota 47 h | 11 testov, vrátane `test_decision_period_is_48_hours` |
+| D2 termín bez `min` | 10 — obmedzenie DD-9 navyše odmietne zápis |
+| D3 SQL živosť podľa `starts_at` | 3, vrátane zhody oboch foriem na hranici 48 h |
+| D4 politika podľa `starts_at` | 9 |
+| D5 strážca termín nezapíše | 21 — obmedzenie DD-9 odmietne každé podanie |
+| D6 termín aj pri `CONFIRMED` | 3 |
+| D7 DD-9 bez `<= starts_at` | 1 — `test_the_database_refuses_a_request_that_breaks_dd9` |
+| D8 kontrola schémy bez obmedzení | 1 |
+| D9 kontrola schémy sa nevolá | 1 |
+| D10 vypršanie pred oprávnením | 2 — `test_authorization_wins_over_expiry` |
+| D11 API bez termínu | 1 |
+
+D7 až D11 zachytáva jediný test (D10 dva). Sú to jednoznačné kontrakty,
+nie hranice — ale ak ktorýkoľvek z týchto testov niekto zmaže, mutácia
+prežije a skript to ohlási.
+
+### Vetva B — rollback a návrat vpred, vyskúšané nad dátami
+
+C08 žiadalo „rollback aj návrat vpred raz vyskúšané nad databázou s dátami";
+zadanie C09 pripomína, že rollback kódu sám nevráti dáta. Postup je
+v `scripts/cr08_rollback.sql` a `scripts/cr08_forward.sql`; skúška prebehla
+2026-11-15 nad PostgreSQL 16 z `docker-compose.yml`, kód v0.3 = `b0974e7`,
+kód v0.4 = `9ede5a6`.
+
+| # | Krok | Výsledok |
+| - | ---- | -------- |
+| 0 | dáta, ktoré vo v0.4 legálne vzniknú: žiadosť **A** po termíne rozhodnutia (začiatok o 5 dní), **B** `CONFIRMED` na tom istom čase, **C** živá žiadosť | BR-02 podľa v0.4: žiadna blokujúca dvojica |
+| 1 | **pasca:** tie isté dáta posúdené pravidlom v0.2 | **blokujúca dvojica `(A, B)`** — podľa v0.2 porušenie BR-02. Rollback kódu bez rollbacku dát by ho vyrobil. |
+| 2 | `cr08_rollback.sql` | `UPDATE 1` (A → `EXPIRED`), obmedzenie DD-9 zrušené, C ostáva `PENDING_APPROVAL`; BR-02 podľa v0.2 platí |
+| 3 | **kód v0.4 nad schémou po rollbacku** | **štart odmietnutý** — „chýba obmedzenie `reservations.ck_reservations_request_has_deadline`". Kontrola z `ADR-02` zachytila aj neúplný návrat. |
+| 4 | kód v0.3 nad dátami po rollbacku | naštartuje; dostupnosť A/B: `UNAVAILABLE`, `CONFIRMED`, `['B']`; nová žiadosť D vznikne bez termínu (`NULL`); C sa dá schváliť |
+| 5 | `cr08_forward.sql` | `UPDATE 1` (D: termín = `starts_at`, AC-09), obmedzenie DD-9 späť |
+| 6 | kód v0.4 po návrate vpred | naštartuje; D sa schváli — správa sa ako vo v0.2 (AC-09) |
+| 7 | BR-02 na konci podľa v0.4 | žiadna blokujúca dvojica; A `EXPIRED`, B, C, D `CONFIRMED` |
+
+**Obmedzenie postupu:** aplikácia musí pri rollbacku stáť. Žiadosť, ktorej
+termín uplynie medzi krokom (1) a nasadením kódu v0.3, by inak ostala
+zapísaná ako živá. Dáta sa pri rollbacku nestrácajú; pri prestavbe podľa
+`ADR-02` áno.
+
+### Vetva B — identita artefaktu
+
+`ci_check.sh` odvodzuje `SOURCE_DATE_EPOCH` od posledného commitu, ktorý
+menil **kód** (`src/`, `pyproject.toml`), nie od posledného commitu vôbec.
+Ten istý kód tak dá bajtovo ten istý wheel, aj keď medzitým pribudli commity
+iba s dokumentáciou — identita produktu sa nemení zmenou README. Pre vetvu A
+to bol commit `35d684f` (vtedy posledný vôbec, teda rovnaký výsledok).
+
+**Nález na PR #15 — CI dalo iný hash než lokálny beh.** Po zavedení tohto
+pravidla zostavilo CI z PR #15 wheel `9ec78c06…`, lokálne `2d3adcc3…`, a ako
+posledný commit s kódom hlásilo `3ce38a4` — syntetický merge commit PR, nie
+náš commit. Príčina: `actions/checkout` predvolene sťahuje iba posledný
+commit (`fetch-depth: 1`). V plytkom klone je ten commit koreňom histórie
+a `git log -- src` ho hlási ako zmenu všetkého. Reprodukované lokálne na
+`951982c`: plytký klon → `951982c` (commit iba s README), úplný klon →
+`9ede5a6`. Pri vetve A sa chyba neprejavila, lebo vtedy sa bral čas
+posledného commitu vôbec. Oprava: `fetch-depth: 0` v `ci.yml`.
+
+### Vetva B — review a nezávislá reprodukcia (T. Hrubý, 2026-11-18)
+
+**Review.** PR #13, #14 a #15 prešiel T. Hrubý proti zadaniu C09 a proti
+odovzdaniu z C08. `DD-8` a `DD-9` sú potvrdené, špecifikácia v0.4 je
+schválená (§11). Overené vlastným behom, nie iba čítaním:
+
+- testy pred kódom: `8ce4035` → **`218 failed, 82 passed, 10 errors`**, presne
+  ako vyššie. Testy sú podľa dátumu autora o 7 minút staršie než kód
+  (`8ce4035` 23:41, `9ede5a6` 23:48); commit testov bol neskôr presadený, preto
+  je jeho dátum commitu blízko kódu,
+- kód zodpovedá `DD-8`, `DD-9` a `ADR-02`; testy čítajú uložený stav novým
+  spojením; rollback skripty zodpovedajú postupu z C08.
+
+**Nálezy a opravy** (cielene na vetvách autora, bez rebase — `9ede5a6` ostal
+nedotknutý):
+
+| # | Nález | Oprava |
+| - | ----- | ------ |
+| RV-C09-1 | Čistý checkout podľa README zlyhal: `docker compose up` → *container name "/swilab-db" is already in use* — pevné `container_name` a kontajner z pôvodného checkoutu na tom istom stroji. | README, *Ako to spustiť*: postup `docker rm -f swilab-db` (`eaf10e0`, #13) |
+| RV-C09-2 | Položky z matice dopadu C08, ktoré ostali: komentáre `errors.py` a `states.py` („nastal `starts_at`"), docstring `check_availability`, „baseline v0.2" v hlavičkách modulov aj v README, opis vypršania v README. | `8200655` (komentáre a docstringy, bez zmeny logiky — `310 passed`) a README v nasledujúcom commite (#15) |
+| RV-C09-3 | Podmienka ACCEPT (4) hovorila „v0.4 schválená pred implementáciou"; kód vznikol skôr. | priznané v §11 špecifikácie (`13c3c32`) a v úvode vetvy B vyššie |
+| RV-C09-4 | Identita artefaktu závisí od času commitu s kódom — squash alebo rebase pri merge by ju zmenili. | v README: merge iba cez *Create a merge commit*, poradie #13 → #14 → #15 |
+| RV-C09-5 | CI pri push do vetvy s otvoreným PR bežalo dvakrát. Drobnosti: BR-08 o žiadostiach spred v0.4 hovorilo o „okamihu podania" (ukladá sa termín); komentár o autoflush v `enter_blocking_state()` zdôvodňoval niečo, čo nenastane. | `push` iba do `main` (`eaf10e0`); BR-08 (`13c3c32`); komentár (`8200655`) |
+
+**Nezávislá reprodukcia — čistý checkout druhým členom (krok 5 zadania C09).**
+
+| | Beh 1 | Beh 2 |
+| - | ----- | ----- |
+| **Kedy** | 2026-11-18 09:31 UTC | 2026-11-18 09:41 UTC |
+| **Commit** | `0769da8` (hlava PR #15 pred review) | `8200655` (po oprave komentárov) |
+| **Prostredie** | macOS 26.6.2 arm64, Python 3.12.11, Docker 28.3.2 — stroj T. Hrubého; nový adresár, `git clone` z GitHubu, žiadny súbor z autorovho prostredia | rovnako |
+| **Príkazy** | README, *Ako to spustiť*: `python3.12 -m venv .venv`, `pip install -r requirements-dev.lock`, `pip install --no-deps --no-build-isolation -e .`, `cp .env.example .env`, `docker compose up -d --wait db`, potom `scripts/ci_check.sh` | rovnako, a pri konflikte kontajnera postup z RV-C09-1 |
+| **Skrytá oprava / odchýlka** | **áno:** `docker compose up` zlyhal na konflikte názvu kontajnera; použitý existujúci kontajner `swilab-db` z pôvodného checkoutu (rovnaký obraz `postgres:16`, port, prihlasovacie údaje). Nález RV-C09-1. | **žiadna** — kontajner odstránený a vytvorený z nového adresára podľa opraveného postupu |
+| **Výsledok** | krok 1: 35 balíčkov presne podľa locku; `310 passed`; pri `PGTZ=Europe/Prague` `310 passed`; 45 mutácií, 0 prežilo; `TC-C08-01..03` PASS; `VSETKY KROKY PRESLI`, návratový kód `0` | rovnako |
+| **Wheel** | kód `9ede5a6`: `2d3adcc3e317eccb001021ccfa743b2e2e6dbd6d97751da62067fee531788e7d` — **bajtovo rovnaký ako zostavenie T. Krišicu** (macOS, Python 3.12.13) | kód `8200655`: `cf090f0b6615c13ec80c49afc8e7d0813d27f033945ee4ea2f45743f905626ef` — **rovnaký ako v CI** ([run 44278224079](https://github.com/thspowered/SWI-LAB/actions/runs/44278224079), Linux x86_64, Python 3.12.16; aj v behu nad merge commitom PR, run 44278233074) |
+
+Pre kód `9ede5a6` dali dva stroje s rôznymi patch verziami Pythonu (3.12.11
+a 3.12.13) ten istý wheel; pre finálny kód `8200655` macOS arm64 s Pythonom
+3.12.11 a Linux x86_64 s Pythonom 3.12.16 v CI. Reprodukovateľnosť artefaktu
+je tým doložená nezávisle od autora.
+

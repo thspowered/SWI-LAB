@@ -1,6 +1,6 @@
 [project]
 name = "swilab"
-version = "0.2.0"
+version = "0.4.0"
 description = "SWI-LAB - rezervacny system laboratornych pristrojov"
 requires-python = ">=3.12"
 dependencies = [
@@ -15,6 +15,11 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "httpx>=0.28",
+    # Zostavenie artefaktu (C09). Build bezi s --no-isolation, aby sa
+    # pouzil setuptools z requirements-dev.lock, nie hocijaky najnovsi -
+    # inak by ten isty commit dal pri kazdom zostaveni iny wheel.
+    "build>=1.2",
+    "setuptools>=68",
 ]
 
 [build-system]
