@@ -1785,3 +1785,175 @@ záznamu (opravené po nezávislej kontrole):
 ten je jadrom rizika `R-06` pri CR-08. C09 ho overí testom na úrovni služby
 s explicitným `now` (poradie sa dá určiť priamo, bariéra netreba). Pre CR-08
 sú testy vyššie regresnými testami AC-07.
+
+---
+
+## C09 — Integrácia, CI a reprodukovateľný release
+
+C09 sa delí na dve časti, ktoré na sebe nezávisia:
+
+- **vetva A** (tento oddiel) — automatizácia a identita release: zamknuté
+  závislosti, jeden kontrolný skript, CI pri PR a push do `main`, reprodukovateľný
+  artefakt. **Kód aplikácie sa nemení.**
+- **vetva B** — samotná zmena `CR-08` podľa ohraničenej delty z C08
+  ([intent-and-change.md](intent-and-change.md#c08--controlled-change-cr-08)).
+
+Záznam C09 podľa šablóny zo zadania je v [README, časť C09](../README.md#c09--integration-ci-and-release-record).
+
+### Vetva A — zamknuté závislosti
+
+**Prečo.** `pyproject.toml` uvádza iba spodné hranice. Ten istý commit tak
+dával na rôznych strojoch a v rôznych dňoch iný produkt — evidence C08 to
+priznávala ako obmedzenie reprodukovateľnosti. Pri príprave locku sa ukázalo,
+ako rýchlo sa to deje:
+
+| Balíček | T. Hrubý, C08 (2026-11-15) | T. Krišica, obnovenie C08 (2026-11-15) | čistá inštalácia, C09 (2026-11-15) |
+| ------- | -------------------------- | -------------------------------------- | ---------------------------------- |
+| FastAPI | 0.141.1 | 0.142.2 | **0.163.1** |
+| SQLAlchemy | 2.0.52 | 2.1.3 | **2.1.8** |
+| psycopg | 3.3.5 | 3.3.6 | **3.3.9** |
+| pydantic | 2.13.5 | 2.13.5 | **2.14.3** |
+
+Tri prostredia, tri rôzne produkty — a všetky tri hlásili `253 passed`.
+Zelená sada bez locku teda nehovorí, **na čom** bola zelená.
+
+**Ako lock vznikol.** Z čistého venv (Python 3.12.13), nie z vývojárskeho
+prostredia: to obsahovalo nástroje, ktoré projekt nedeklaruje (`python-pptx`,
+`pillow`, `lxml`, `xlsxwriter` — z práce na prezentáciách), a `pip freeze`
+by ich zapísal do identity produktu.
+
+| Súbor | Obsah | Použitie |
+| ----- | ----- | -------- |
+| `requirements.lock` | 24 runtime balíčkov | identita produktu v RC manifeste |
+| `requirements-dev.lock` | 35 balíčkov: runtime + `pytest`, `httpx` + `build`, `setuptools` | CI, čistý checkout, `ci_check.sh` |
+
+Runtime lock je vygenerovaný s obmedzením na dev lock, takže verzie spoločných
+balíčkov sú v oboch súboroch rovnaké (overené `comm`).
+
+**Overenie na zamknutých verziách** — pred zamknutím, nie po ňom:
+
+| Kontrola | Výsledok |
+| -------- | -------- |
+| `pytest -q` | `253 passed` |
+| `PGTZ=Europe/Prague pytest -q` | `253 passed` |
+| `scripts/mutation_check.py` | 34 mutácií, 0 prežilo |
+| `scripts/c08_baseline_tc.py` proti bežiacej aplikácii | `TC-C08-01..03` 3× `PASS`, návratový kód `0` |
+
+Projekt teda funguje aj na verziách o dvadsať minor verzií FastAPI novších,
+než na akých vznikol — a od tohto commitu sa už nezmenia bez zmeny locku.
+
+### Vetva A — jeden kontrolný skript
+
+`scripts/ci_check.sh` je **jediný** popis toho, čo sa kontroluje. Spúšťa ho
+CI aj človek lokálne, takže „zelené v CI" a „zelené u mňa" znamenajú to isté.
+
+| Krok | Čo robí | Prečo |
+| ---- | ------- | ----- |
+| 1/6 identita behu | commit, Python, systém; **každá zamknutá verzia musí byť nainstalovaná presne** | zelená na iných verziách by nič nedokazovala |
+| 2/6 `pytest` | celá sada proti PostgreSQL | jednotkové, komponentové a súbehové testy |
+| 3/6 `pytest` pri `PGTZ=Europe/Prague` | tá istá sada pri inom pásme klienta | trvalá ochrana nálezu F-01 — predtým sa to overilo raz a ručne |
+| 4/6 mutácie | 34 vložených chýb musí sada zachytiť | zelená sada, ktorá nič nezachytí, je bezcenná |
+| 5/6 `TC-C08-01..03` | aplikácia sa spustí, test cases idú cez HTTP, stav sa číta novým spojením priamo z databázy | **skutočná integračná hranica** HTTP → aplikácia → PostgreSQL, ktorú zadanie C09 žiada |
+| 6/6 artefakt | wheel + SHA256 do `dist/SHA256SUMS` | identita produktu (krok 6 zadania) |
+
+Návratový kód `0` iba vtedy, keď prejdú všetky kroky; inak skript skončí na
+prvom zlyhanom kroku a vypíše ktorý.
+
+**Lokálny beh — prostredie nainštalované presne ako v CI.** Nový venv,
+`pip install -r requirements-dev.lock`, `pip install --no-deps --no-build-isolation -e .`:
+
+| Položka | Hodnota |
+| ------- | ------- |
+| Commit | `35d684f` |
+| Prostredie | Python 3.12.13, Darwin arm64, PostgreSQL 16.13 z `docker-compose.yml` |
+| Príkaz | `PYTHON=<venv>/bin/python scripts/ci_check.sh` |
+| Výsledok | návratový kód **`0`**, `VSETKY KROKY PRESLI` |
+| Kroky | lock 35/35 · `253 passed` · `253 passed` (Prague) · 34/34 · `TC-C08-01..03` PASS · wheel |
+| Artefakt | `swilab-0.2.0-py3-none-any.whl`, SHA256 `a4e80878b4a7384381e6cfdc6c5313b98e4d6dc1f7aba910d1545bb161fb7592` |
+
+**Negatívna kontrola — skript musí odmietnuť prostredie mimo locku.** Ten istý
+skript spustený vo vývojárskom `.venv` (SQLAlchemy 2.1.3 namiesto 2.1.8 a
+ďalších 14 rozdielov):
+
+```text
+  sqlalchemy: zamknute 2.1.8, nainstalovane 2.1.3
+  starlette: zamknute 1.10.0, nainstalovane 1.7.0
+  ...
+prostredie nezodpoveda requirements-dev.lock
+
+ZLYHANIE v kroku: 1/6 identita behu (navratovy kod 1)
+```
+
+Skript sa k testom nedostal. Zelená na nesprávnych verziách teda nemôže vzniknúť.
+
+### Vetva A — reprodukovateľný artefakt
+
+Wheel obsahuje iba balík `swilab` (15 modulov) a metadáta — žiadne testy,
+skripty ani dokumenty. Zostavuje sa s dvoma nastaveniami:
+
+- `SOURCE_DATE_EPOCH` = čas commitu — časové značky v archíve nezávisia od
+  okamihu zostavenia,
+- `--no-isolation` — použije sa `setuptools` z locku, nie najnovší z PyPI.
+
+| Pokus | SHA256 |
+| ----- | ------ |
+| `2a6f615`, beh 1, so `SOURCE_DATE_EPOCH` | `c8e606fd…ee80f02` |
+| `2a6f615`, beh 2, so `SOURCE_DATE_EPOCH` | `c8e606fd…ee80f02` — **zhodný** |
+| `2a6f615`, beh 3, bez `SOURCE_DATE_EPOCH` | `f06f7dcf…ad46e6c5` — iný |
+
+Ten istý commit dá **bajtovo ten istý wheel**. Hash je teda identita, ktorú
+môže ktokoľvek overiť zostavením zo zdroja — nie iba číslo, ktoré niekto
+vypísal. Metadáta wheelu (`Requires-Dist`) obsahujú spodné hranice z
+`pyproject.toml`; presné verzie prostredia určuje `requirements.lock`.
+
+### Vetva A — CI
+
+`.github/workflows/ci.yml`, pri každom PR a push do `main`: Ubuntu, Python 3.12,
+PostgreSQL 16 ako service kontajner na porte 5433 (rovnako ako
+`docker-compose.yml`, takže `DATABASE_URL` je všade rovnaká), závislosti
+z `requirements-dev.lock`, potom `scripts/ci_check.sh` a wheel ako artefakt
+behu.
+
+Heslo v `ci.yml` je heslo vývojového kontajnera z `docker-compose.yml`,
+nie tajomstvo — rovnaké ako na miestach, ktoré vymenúva krok 0 v C08.
+
+**Prvý beh CI** — [run 43767331765](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765),
+udalosť `push`, commit `35d684f` — ten istý commit ako lokálny beh vyššie,
+pushnutý samostatne práve kvôli tomuto porovnaniu:
+
+| Položka | Lokálne (T. Krišica) | CI |
+| ------- | -------------------- | -- |
+| Systém | Darwin arm64 | Linux x86_64 (`ubuntu-latest`) |
+| Python | 3.12.13 | 3.12.16 |
+| PostgreSQL | 16.13 | 16.16 |
+| Lock | 35/35 v zamknutej verzii | 35/35 v zamknutej verzii |
+| `pytest` / pri `PGTZ=Europe/Prague` | `253 passed` / `253 passed` | `253 passed` / `253 passed` |
+| Mutácie | 34, 0 prežilo | 34, 0 prežilo |
+| `TC-C08-01..03` | 3× `PASS` | 3× `PASS` |
+| Výsledok | návratový kód `0` | `success` |
+| **SHA256 wheelu** | `a4e80878b4a7384381e6cfdc6c5313b98e4d6dc1f7aba910d1545bb161fb7592` | **`a4e80878b4a7384381e6cfdc6c5313b98e4d6dc1f7aba910d1545bb161fb7592`** |
+
+**Hash je zhodný naprieč operačným systémom, architektúrou aj patch verziou
+Pythonu.** Reprodukovateľnosť artefaktu teda nie je vlastnosť jedného stroja:
+ktokoľvek, kto zostaví commit `35d684f` podľa `ci_check.sh`, dostane ten istý
+súbor — a môže to overiť porovnaním s artefaktom behu CI.
+
+Lock pritom nedrží verziu Pythonu ani Postgresu na patch úrovni (3.12.13 vs.
+3.12.16, 16.13 vs. 16.16) a výsledok sa nezmenil. Je to obmedzenie, ktoré
+zostáva — pozri nižšie.
+
+### Vetva A — čo nedokazuje
+
+- **Kód aplikácie sa nezmenil.** CI dnes overuje baseline pred `CR-08`.
+  Novú požiadavku overí až vetva B — vtedy `TC-C08-03` podľa očakávania
+  zmení výsledok a skript treba upraviť (krok 3 delty z C08).
+- **Python a PostgreSQL sú zamknuté iba na minor verzii** (`3.12`, `postgres:16`).
+  Prvý beh CI prebehol na iných patch verziách než lokálny a dal rovnaký
+  výsledok aj hash — ale to je pozorovanie, nie záruka.
+- **Lock neobsahuje hashe balíčkov** a nezachováva platformové značky:
+  `uvloop` a `httptools` sa neinštalujú na Windows. Platí pre Linux a macOS,
+  na ktorých tím a CI bežia.
+- **Verzia balíčka je stále `0.2.0`.** Či bude `0.4.0` (zhoda so špecifikáciou
+  v0.4), alebo sa číslovanie rozpojí, je otvorené rozhodnutie pre vetvu B.
+- **Nezávislý čistý checkout** druhým členom (krok 5 zadania) ešte neprebehol.
+  Lokálny beh vyššie robil autor tejto vetvy na vlastnom stroji.
