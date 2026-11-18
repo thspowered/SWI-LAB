@@ -1236,7 +1236,9 @@ plán skóre neznižuje.
   `CR-08` raz vyskúšané nad databázou s dátami (evidence C09). Zlyhanie pri
   zmene schémy je teda skoré a zrozumiteľné, nie `500` pri každej
   požiadavke. Strata dát pri prestavbe ostáva (bez volume, `ADR-02`).
-  Pre CP2 **MEDIUM (4) — overené**; *návrh, potvrdí owner pri review.*
+  Pre CP2 **MEDIUM (4) — overené**; potvrdil owner T. Hrubý v review PR #15
+  (2026-11-18). Overené testami a skúškou rollbacku, nie čistým checkoutom —
+  v ňom pytest schému najprv prestaví, takže kontrolu pri štarte nespustí.
 - **Prijatie:** Tomáš Hrubý pre CP1.
 - **Monitoring / trigger:** akákoľvek zmena v `models.py`. Po `ADR-02`
   pribúda spúšťač na prehodnotenie celého rozhodnutia: `volumes:` pre databázu
@@ -1973,7 +1975,9 @@ zostáva — pozri nižšie.
 **Rozhodnutie z C08:** [CR-08](intent-and-change.md#c08--controlled-change-cr-08),
 `ACCEPT`, varianta A so zmenou `CA-5`, peer review PR #11. Podmienky ACCEPT:
 (1)(2) review, (3) migrácie — `ADR-02`, (4) špecifikácia v0.4 — PR #14,
-**čaká na schválenie**. Kód preto ide v samostatnom PR, ktorý nadväzuje na
+**schválená 2026-11-18** (review T. Hrubého). Kód vznikol súbežne so
+špecifikáciou, teda pred jej schválením; podmienka (4) je dodržaná na úrovni
+integrácie, nie písania. Kód preto ide v samostatnom PR, ktorý nadväzuje na
 PR #14 a do `main` sa smie dostať až po jeho schválení.
 
 **Ohraničená delta z C08 → čo vzniklo:**
@@ -2092,3 +2096,45 @@ a `git log -- src` ho hlási ako zmenu všetkého. Reprodukované lokálne na
 `951982c`: plytký klon → `951982c` (commit iba s README), úplný klon →
 `9ede5a6`. Pri vetve A sa chyba neprejavila, lebo vtedy sa bral čas
 posledného commitu vôbec. Oprava: `fetch-depth: 0` v `ci.yml`.
+
+### Vetva B — review a nezávislá reprodukcia (T. Hrubý, 2026-11-18)
+
+**Review.** PR #13, #14 a #15 prešiel T. Hrubý proti zadaniu C09 a proti
+odovzdaniu z C08. `DD-8` a `DD-9` sú potvrdené, špecifikácia v0.4 je
+schválená (§11). Overené vlastným behom, nie iba čítaním:
+
+- testy pred kódom: `8ce4035` → **`218 failed, 82 passed, 10 errors`**, presne
+  ako vyššie. Testy sú podľa dátumu autora o 7 minút staršie než kód
+  (`8ce4035` 23:41, `9ede5a6` 23:48); commit testov bol neskôr presadený, preto
+  je jeho dátum commitu blízko kódu,
+- kód zodpovedá `DD-8`, `DD-9` a `ADR-02`; testy čítajú uložený stav novým
+  spojením; rollback skripty zodpovedajú postupu z C08.
+
+**Nálezy a opravy** (cielene na vetvách autora, bez rebase — `9ede5a6` ostal
+nedotknutý):
+
+| # | Nález | Oprava |
+| - | ----- | ------ |
+| RV-C09-1 | Čistý checkout podľa README zlyhal: `docker compose up` → *container name "/swilab-db" is already in use* — pevné `container_name` a kontajner z pôvodného checkoutu na tom istom stroji. | README, *Ako to spustiť*: postup `docker rm -f swilab-db` (`eaf10e0`, #13) |
+| RV-C09-2 | Položky z matice dopadu C08, ktoré ostali: komentáre `errors.py` a `states.py` („nastal `starts_at`"), docstring `check_availability`, „baseline v0.2" v hlavičkách modulov aj v README, opis vypršania v README. | `8200655` (komentáre a docstringy, bez zmeny logiky — `310 passed`) a README v nasledujúcom commite (#15) |
+| RV-C09-3 | Podmienka ACCEPT (4) hovorila „v0.4 schválená pred implementáciou"; kód vznikol skôr. | priznané v §11 špecifikácie (`13c3c32`) a v úvode vetvy B vyššie |
+| RV-C09-4 | Identita artefaktu závisí od času commitu s kódom — squash alebo rebase pri merge by ju zmenili. | v README: merge iba cez *Create a merge commit*, poradie #13 → #14 → #15 |
+| RV-C09-5 | CI pri push do vetvy s otvoreným PR bežalo dvakrát. Drobnosti: BR-08 o žiadostiach spred v0.4 hovorilo o „okamihu podania" (ukladá sa termín); komentár o autoflush v `enter_blocking_state()` zdôvodňoval niečo, čo nenastane. | `push` iba do `main` (`eaf10e0`); BR-08 (`13c3c32`); komentár (`8200655`) |
+
+**Nezávislá reprodukcia — čistý checkout druhým členom (krok 5 zadania C09).**
+
+| | Beh 1 | Beh 2 |
+| - | ----- | ----- |
+| **Kedy** | 2026-11-18 09:31 UTC | 2026-11-18 09:41 UTC |
+| **Commit** | `0769da8` (hlava PR #15 pred review) | `8200655` (po oprave komentárov) |
+| **Prostredie** | macOS 26.6.2 arm64, Python 3.12.11, Docker 28.3.2 — stroj T. Hrubého; nový adresár, `git clone` z GitHubu, žiadny súbor z autorovho prostredia | rovnako |
+| **Príkazy** | README, *Ako to spustiť*: `python3.12 -m venv .venv`, `pip install -r requirements-dev.lock`, `pip install --no-deps --no-build-isolation -e .`, `cp .env.example .env`, `docker compose up -d --wait db`, potom `scripts/ci_check.sh` | rovnako, a pri konflikte kontajnera postup z RV-C09-1 |
+| **Skrytá oprava / odchýlka** | **áno:** `docker compose up` zlyhal na konflikte názvu kontajnera; použitý existujúci kontajner `swilab-db` z pôvodného checkoutu (rovnaký obraz `postgres:16`, port, prihlasovacie údaje). Nález RV-C09-1. | **žiadna** — kontajner odstránený a vytvorený z nového adresára podľa opraveného postupu |
+| **Výsledok** | krok 1: 35 balíčkov presne podľa locku; `310 passed`; pri `PGTZ=Europe/Prague` `310 passed`; 45 mutácií, 0 prežilo; `TC-C08-01..03` PASS; `VSETKY KROKY PRESLI`, návratový kód `0` | rovnako |
+| **Wheel** | kód `9ede5a6`: `2d3adcc3e317eccb001021ccfa743b2e2e6dbd6d97751da62067fee531788e7d` — **bajtovo rovnaký ako zostavenie T. Krišicu** (macOS, Python 3.12.13) | kód `8200655`: `cf090f0b6615c13ec80c49afc8e7d0813d27f033945ee4ea2f45743f905626ef` — **rovnaký ako v CI** ([run 44278224079](https://github.com/thspowered/SWI-LAB/actions/runs/44278224079), Linux x86_64, Python 3.12.16; aj v behu nad merge commitom PR, run 44278233074) |
+
+Pre kód `9ede5a6` dali dva stroje s rôznymi patch verziami Pythonu (3.12.11
+a 3.12.13) ten istý wheel; pre finálny kód `8200655` macOS arm64 s Pythonom
+3.12.11 a Linux x86_64 s Pythonom 3.12.16 v CI. Reprodukovateľnosť artefaktu
+je tým doložená nezávisle od autora.
+

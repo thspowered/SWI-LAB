@@ -33,7 +33,7 @@ prístroj obsluhuje iba certifikovaný človek.
 
 **Externá hranica:** Notification Service.
 
-Záväzné znenie je v [docs/specification.md](docs/specification.md) — baseline v0.2.
+Záväzné znenie je v [docs/specification.md](docs/specification.md) — baseline v0.4.
 Táto sekcia je len prehľad.
 
 Podrobne v [docs/intent-and-change.md](docs/intent-and-change.md).
@@ -75,7 +75,7 @@ Na macOS stačí, aby mal `.pth` súbor v `site-packages` flag `hidden` —
 CPython skryté `.pth` zámerne preskakuje a editable install prestane fungovať
 bez akejkoľvek chybovej hlášky (`chflags nohidden` to opraví).
 
-## Operácie (baseline v0.2)
+## Operácie (baseline v0.4)
 
 | Operácia | Endpoint |
 | -------- | -------- |
@@ -87,7 +87,9 @@ bez akejkoľvek chybovej hlášky (`chflags nohidden` to opraví).
 
 Prístroje s príznakom `requires_approval` idú cez schvaľovanie: potvrdenie
 vytvorí žiadosť (`PENDING_APPROVAL`), ktorá prístroj blokuje, kým o nej vedúci
-nerozhodne alebo kým nenastane jej začiatok (`EXPIRED`).
+nerozhodne alebo kým neuplynie jej **termín rozhodnutia** — 48 h od podania,
+najneskôr začiatok rezervácie (`EXPIRED`, BR-08 v0.4). Termín vráti odpoveď
+potvrdenia v poli `decision_deadline`.
 
 Stavy rezervácie: `DRAFT` · `PENDING_APPROVAL` · `CONFIRMED` · `CANCELLED` ·
 `REJECTED` · `EXPIRED`.
@@ -292,7 +294,7 @@ C09 sa delí na **vetvu A** (CI, zamknuté závislosti, artefakt —
 [PR #13](https://github.com/thspowered/SWI-LAB/pull/13)) a **vetvu B**
 (implementácia `CR-08`): špecifikácia v0.4 a návrh v
 [PR #14](https://github.com/thspowered/SWI-LAB/pull/14), kód v PR #15.
-Všetky tri čakajú na review T. Hrubého.
+Review T. Hrubého 2026-11-18 — všetky tri schválené; opravy z review sú v `eaf10e0` (#13), `13c3c32` (#14) a `8200655` + nasledujúci commit (#15). Mergovať iba cez **Create a merge commit**, v poradí #13 → #14 → #15 — squash alebo rebase by zmenili commit s kódom a tým aj hash artefaktu.
 
 ### Príkazy
 
@@ -325,10 +327,10 @@ bez `[dev]`. Hlavičku súborov zachovaj.
 | Položka | Stav |
 | ------- | ---- |
 | **C08 Change Card a rozhodnutie** | [CR-08](docs/intent-and-change.md#c08--controlled-change-cr-08) — **ACCEPT, varianta A** so zmenou `CA-5` (T je konštanta). Peer review [PR #11](https://github.com/thspowered/SWI-LAB/pull/11). Podmienky ACCEPT: (1)(2) review, (3) [`ADR-02`](docs/architecture-and-decisions.md#adr-02--migrácie-schémy-pred-zmenou-v-c09) migrácie, (4) špecifikácia — v0.3 uzavrela F-03, `CR-08` ide do **v0.4** ([PR #12](https://github.com/thspowered/SWI-LAB/pull/12)). |
-| **Before / after** | before: `b0974e7` (kód v0.3; od `b17d58c` nezmenený). after: kód **`9ede5a6`** — posledný commit, ktorý mení `src/` alebo `pyproject.toml`. |
+| **Before / after** | before: `b0974e7` (kód v0.3; od `b17d58c` nezmenený). after: kód **`8200655`** — posledný commit, ktorý mení `src/` alebo `pyproject.toml` (review opravilo komentáre a docstringy; funkčný kód je z `9ede5a6`). |
 | **Dotknuté tvrdenia, nové AC, regresia** | nové: `AC-01` až `AC-10` z CR-08. Regresia: `TC-C08-01/02`, celá sada, súbeh REQ-05 a REQ-16. |
 | **Zmenený kód / dáta / konfigurácia / ADR** | vetva A: CI, lock, build tooling. Vetva B: špecifikácia v0.4 a diagramy; návrh `DD-8`, `DD-9`; `rules` (lehota, termín), politika (termín ako povinný parameter), strážca zapíše termín, SQL forma živosti, stĺpec `decision_deadline` + obmedzenie, kontrola schémy pri štarte (`ADR-02`), pole v API, verzia `0.4.0`. Konfigurácia sa nemení (`CA-5`). N/A: worker, import, admin — neexistujú. |
-| **Peer review** | **PENDING** — T. Hrubý: PR #13 (vetva A), PR #14 (v0.4 a návrh — podmienka ACCEPT 4), PR #15 (kód). Napadnúť treba najmä `DD-8` a `DD-9` — C08 ich výslovne nerozhodlo. |
+| **Peer review** | **Vykonané 2026-11-18** — T. Hrubý: PR #13, #14, #15 schválené. Napadnuté `DD-8` a `DD-9` — potvrdené: jedno uložené porovnanie odstraňuje hlavný failure mode varianty A z C08. Špecifikácia v0.4 schválená (§11). Overené vlastným behom: testy pred kódom na `8ce4035` → `218 failed, 82 passed, 10 errors`, ako tvrdí evidence. Nálezy a opravy sú v evidence (*Vetva B — review a nezávislá reprodukcia*). |
 | **Nové správanie (AC-01..AC-10)** | **PASS** — 57 nových testov a `TC-C08-03` ako oracle CR-08; tabuľka expected / actual v evidence. Expected pred kódom: commit `8ce4035`, beh pred kódom `218 failed`, po kóde `310 passed`. |
 | **Regresia `TC-C08-01`** | **PASS** — `ci_check.sh` krok 5 na kóde v0.4 (`2eaa82f`), aj predtým na baseline (`35d684f`, lokálne aj v CI) |
 | **Regresia `TC-C08-02`** | **PASS** — tamtiež |
@@ -337,14 +339,14 @@ bez `[dev]`. Hlavičku súborov zachovaj.
 | **Lock + runtime + schéma + konfigurácia** | `requirements.lock` (24 runtime balíčkov), `requirements-dev.lock` (35); Python 3.12; schéma z `models.py` cez `create_all()`, bez migrácií podľa `ADR-02` — od v0.4 so stĺpcom `reservations.decision_deadline` a obmedzením `ck_reservations_request_has_deadline`, aplikácia nad inou schémou nenaštartuje; jediná konfigurácia `DATABASE_URL` (`.env.example`). |
 | **Príkazy pre čistý checkout** | časť *Príkazy* vyššie a *Ako to spustiť* |
 | **CI** | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) pri push a PR. Prvý beh: [`success`](https://github.com/thspowered/SWI-LAB/actions/runs/43767331765) na `35d684f` — všetkých 6 krokov, rovnaké výsledky ako lokálne. |
-| **Nezávislý reprodukujúci člen** | **PENDING** — T. Hrubý (druhý člen; vetvy A aj B pripravil T. Krišica). Overí `scripts/ci_check.sh` z čistého checkoutu a **hash wheelu** nižšie. |
-| **Artefakt** | **`swilab-0.4.0-py3-none-any.whl`**, kód `9ede5a6`, SHA256 **`2d3adcc3e317eccb001021ccfa743b2e2e6dbd6d97751da62067fee531788e7d`**. Reprodukovateľný: ten istý kód dá bajtovo ten istý wheel aj po commitoch iba s dokumentáciou (`SOURCE_DATE_EPOCH` z posledného commitu s kódom). Rebase vetvy by hash zmenil — merge commit nie. Vetva A (`0.2.0`, `35d684f`): `a4e80878…fb7592`, zhodný z macOS aj z Linuxu v CI. |
+| **Nezávislý reprodukujúci člen** | **T. Hrubý, 2026-11-18** — dva čisté checkouty z GitHubu do nového adresára, macOS 26.6.2 arm64, Python 3.12.11, Docker 28.3.2. (1) `0769da8`: všetkých 6 krokov `ci_check.sh`, wheel `2d3adcc3…788e7d` — **bajtovo rovnaký ako u T. Krišicu**; odchýlka od README: databázový kontajner z pôvodného checkoutu (`container_name`), opravené v README (#13). (2) `8200655`: všetkých 6 krokov **presne podľa README** vrátane nového postupu pri konflikte kontajnera, wheel `cf090f0b…626ef`. Podrobne v evidence. |
+| **Artefakt** | **`swilab-0.4.0-py3-none-any.whl`**, kód `8200655`, SHA256 **`cf090f0b6615c13ec80c49afc8e7d0813d27f033945ee4ea2f45743f905626ef`** — čistý checkout T. Hrubého; rovnaký v CI ([run 44278224079](https://github.com/thspowered/SWI-LAB/actions/runs/44278224079), Linux x86_64, Python 3.12.16). Pred review (kód `9ede5a6`): `2d3adcc3…788e7d`, zhodný u oboch členov. Reprodukovateľný: ten istý kód dá bajtovo ten istý wheel aj po commitoch iba s dokumentáciou (`SOURCE_DATE_EPOCH` z posledného commitu s kódom). Rebase vetvy by hash zmenil — merge commit nie. Vetva A (`0.2.0`, `35d684f`): `a4e80878…fb7592`, zhodný z macOS aj z Linuxu v CI. |
 | **Obnova / rollback** | Rollback kódu **nevráti dáta**: dáta legálne vo v0.4 sú podľa v0.2 porušením BR-02 (overené). Postup `scripts/cr08_rollback.sql` → kód v0.3 → `scripts/cr08_forward.sql` → kód v0.4 **raz vyskúšaný nad dátami**, 8 krokov v evidence. Aplikácia musí pri rollbacku stáť. Prestavba podľa `ADR-02` dáta zmaže (bez volume). |
-| **Rozhodnutie o RC** | **HOLD** — návrh T. Krišica, owner tím. Všetky vykonané kontroly prešli, ale chýbajú tri dôkazy, ktoré Definition of Done C09 žiada: (1) schválená špecifikácia v0.4 — podmienka ACCEPT (4), PR #14; (2) peer review kódu, PR #15; (3) čistý checkout druhým členom s rovnakým hashom wheelu. **Po nich** navrhujem **CONDITIONAL** so známymi obmedzeniami: víkendová diera (`CA-1`), žiadateľ ani vedúci nedostanú oznámenie (I-01, TBD-03/09), lock bez hashov a mimo Windows, prestavba DB maže dáta. Zelená CI nie je súhlas s vydaním. |
+| **Rozhodnutie o RC** | **CONDITIONAL** — owner tím; navrhol T. Krišica, potvrdil T. Hrubý v review 2026-11-18. Tri dôkazy, pre ktoré bolo pôvodne HOLD, sú doplnené: (1) špecifikácia v0.4 schválená (PR #14), (2) peer review kódu (PR #15), (3) čistý checkout druhým členom s rovnakým hashom wheelu. **Podmienky / známe obmedzenia:** víkendová diera (`CA-1`); žiadateľ ani vedúci nedostanú oznámenie (I-01, TBD-03/09); lock bez hashov balíčkov a mimo Windows; prestavba DB maže dáta (`ADR-02`); merge iba cez merge commit, inak sa identita artefaktu zmení. Zmenu na READY by priniesli oznámenia (TBD-03) a lock s hashmi. Zelená CI nie je súhlas s vydaním. |
 
 ## Dokumentácia
 
-- [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.2
+- [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.4
 - [docs/diagrams.md](docs/diagrams.md) — prípady užitia, stavový diagram, diagramy aktivít
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure, C08 Change Request `CR-08`
