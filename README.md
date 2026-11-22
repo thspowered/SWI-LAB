@@ -367,10 +367,13 @@ takže môže bežať popri nej. Na konci kontajner odstráni (`C10_KEEP=1` ho
 nechá). Vypíše log aplikácie po situáciách a cestu k celému `app.log`.
 
 Aplikácia od verzie 0.4.1 loguje na `stderr` iba **technickú poruchu
-databázy** (jeden riadok ERROR s časom v UTC, operáciou, typom a výsledkom,
-bez parametrov SQL) a **štart a zastavenie** (čas, verzia, cieľová databáza
-bez hesla). Úspech ani doménové zamietnutie zámerne nie. Po reštarte
-databázy pool mŕtve spojenie nahradí (nález F-04).
+databázy** a **štart a zastavenie**. Pri poruche je to jeden záznam ERROR:
+riadok s časom v UTC, číslom procesu, operáciou, typom a výsledkom, za ním
+traceback bez parametrov SQL. Štart a zastavenie nesú čas, verziu a cieľovú
+databázu bez hesla. Úspech ani doménové zamietnutie zámerne nie. Po
+reštarte databázy pool mŕtve spojenie nahradí (nález F-04). Pri vlastnej
+konfigurácii logovania (`--log-config`) definuj aj logger `swilab`
+(`src/swilab/logs.py`).
 
 ## C10 Definition of Done
 
@@ -383,7 +386,11 @@ databázy pool mŕtve spojenie nahradí (nález F-04).
   a `docker restart` vlastného kontajnera, iba testovacie dáta
 - [x] chýbajúca informácia v logu doplnená a pokus zopakovaný — čas, jeden
   záznam poruchy, verzia pri štarte (L-1 až L-4); testy pred kódom
-  (`5a9f882`, 4 červené), kód `57e63fa`, mutácie `F04`, `L1` až `L3`
+  (`5a9f882`, 4 červené), kód `57e63fa`, po review `962eabd` (4 červené)
+  a `ea55a6f`; mutácie `F04`, `L1` až `L4` (číslo = zistenie) a `L2b`
+- [x] dve nezávislé kontroly — nálezy RV-C10-1 až 8 opravené alebo priznané
+  (evidence, *Nezávislá kontrola a beh 5*); `ci_check.sh` na `ea55a6f`:
+  `322 passed`, 51 mutácií, 0 prežilo
 - [x] rozhodnutie, či logovať doménové zamietnutie — nie, so zdôvodnením
 - [x] krátky záznam v tabuľke zo zadania, odpovede na tri otázky, testovaný
   commit, čo C10 nepokrýva. Žiadny pokus nebol `BLOCKED`.

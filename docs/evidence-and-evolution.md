@@ -2162,8 +2162,9 @@ zistenia a rozhodnutia — sú v ďalších častiach.
 **Testovaný commit:** pred zmenou kód
 [`8200655`](https://github.com/thspowered/SWI-LAB/commit/8200655) — posledný
 commit, ktorý menil `src/`, kód RC 0.4.0 (tag `c09-release` je na `fd8a16f`,
-kód je rovnaký). Po zmene [`57e63fa`](https://github.com/thspowered/SWI-LAB/commit/57e63fa)
-(0.4.1). Situácie vykonal `scripts/c10_provoz.py`. Žiadny pokus nebol `BLOCKED`.
+kód je rovnaký). Po zmene [`ea55a6f`](https://github.com/thspowered/SWI-LAB/commit/ea55a6f)
+(0.4.1, po review; prvá verzia zmeny `57e63fa`). Situácie vykonal
+`scripts/c10_provoz.py`. Žiadny pokus nebol `BLOCKED`.
 
 | Situácia | Očakávaný a skutočný výsledok | Ako sme správnosť overili | Čo ukazujú logy / je log potrebný? |
 | -------- | ----------------------------- | ------------------------- | ---------------------------------- |
@@ -2172,17 +2173,18 @@ kód je rovnaký). Po zmene [`57e63fa`](https://github.com/thspowered/SWI-LAB/co
 | **Technická porucha a obnova** | Zastavená DB (P3a): `500`, nič sa nezapíše, po obnove jedno opakovanie uspeje — skutočne rovnako. **PASS**. Reštart DB (P3b): prvá požiadavka má uspieť — pred zmenou `500` (**FAIL**, F-04), po zmene `200`. **PASS** | SQL **pred** opakovaním: `B3` `DRAFT`, `B1` `CONFIRMED`. Až potom jedno opakovanie, po ňom `B3` `CONFIRMED` | Pred zmenou dva záznamy bez času (prístupový riadok a traceback). Po zmene jeden záznam ERROR s časom, operáciou, typom a `500` (ukážka nižšie). **Potrebný** — jediný zdroj času a príčiny. Stav `B3` z neho nevyčítame. |
 | **Reštart aplikácie** | `SIGINT` → kód `0`, dáta ostanú, ďalšia operácia uspeje — skutočne rovnako. **PASS** | SQL: `B1`, `B3`, `B4` `CONFIRMED`; dostupnosť cez API po štarte | Po zmene `stop:` a `start:` s časom, verziou a cieľovou databázou. Riadky uvicornu ostávajú bez času. |
 
-Ukážky logu po zmene (skript nahrádza UUID menami):
+Ukážky logu po zmene (beh 5 na `ea55a6f`, UUID nahradené menom, v hranatých
+zátvorkách číslo procesu):
 
 ```
-2026-11-22T17:06:12.574Z ERROR swilab.main: POST /reservations/B3/confirm -> 500: chyba databazy OperationalError (psycopg.OperationalError: connection failed: connection to server at "127.0.0.1", port 5434 failed: could not receive data from server: Connection refused)
+2026-11-22T17:30:03.528Z [32203] ERROR swilab.main: POST /reservations/B3/confirm -> 500: chyba databazy OperationalError (psycopg.OperationalError: connection failed: connection to server at "127.0.0.1", port 5434 failed: could not receive data from server: Connection refused)
 Traceback (most recent call last):
   ... spolu 151 riadkov tracebacku
 ```
 
 ```
-2026-11-22T17:06:14.216Z INFO swilab.main: stop: swilab 0.4.1
-2026-11-22T17:06:14.689Z INFO swilab.main: start: swilab 0.4.1, databaza 127.0.0.1:5434/swilab, schema sedi s modelmi
+2026-11-22T17:30:05.271Z [32203] INFO swilab.main: stop: swilab 0.4.1
+2026-11-22T17:30:05.731Z [32209] INFO swilab.main: start: swilab 0.4.1, databaza 127.0.0.1:5434/swilab, schema sedi s modelmi
 ```
 
 **Ktoré udalosti má zmysel logovať?** Technickú poruchu — jeden záznam
@@ -2386,14 +2388,16 @@ prístrojov. Vtedy INFO s časom, ID rezervácie a kódom, bez osoby.
 **Testovaný kód:** `57e63fa` (verzia 0.4.1), skript bez zmeny od `e603b38`,
 2026-11-22 17:06 UTC, rovnaké prostredie ako beh 3. Návratový kód `0`.
 Celý `scripts/ci_check.sh` na `57e63fa`: `315 passed` (aj pri
-`PGTZ=Europe/Prague`), 49 mutácií, žiadna neprežila (nové `F04`, `L2` až
-`L4` — číslo podľa zistenia, ktoré chránia — zachytí vždy práve test, ktorý ich má chrániť), `TC-C08-01..03` PASS,
+`PGTZ=Europe/Prague`), 49 mutácií, žiadna neprežila (nové `F04`, `L1` až
+`L3` zachytí vždy práve test, ktorý ich má chrániť; po review premenované
+a doplnené, pozri nižšie), `TC-C08-01..03` PASS,
 wheel `swilab-0.4.1-py3-none-any.whl` `951a5e997e59ade9ac7c617543b1203aac0d395aa61790c2d502b116b9be8b10`
 (macOS arm64 — Linux v CI sa overí v PR).
 
 Skrytie parametrov SQL beh 4 nedokladá: porucha v P3a nastala pri
 pripájaní a v tracebacku žiadny príkaz SQL nie je. Dokladá ho test
-`test_a_database_error_does_not_carry_sql_parameters` a mutácia `L3`.
+`test_a_database_error_does_not_carry_sql_parameters` a mutácia `L3` (pred
+premenovaním po review `L1`).
 Traceback po zmene je dlhší (152 riadkov namiesto 132), lebo `pool_pre_ping`
 pridal reťazenú výnimku. Súhrnný riadok však stojí sám. Ak by šum vadil,
 traceback sa dá presunúť na úroveň DEBUG.
@@ -2401,6 +2405,42 @@ traceback sa dá presunúť na úroveň DEBUG.
 Testy pred kódom: `5a9f882` → `4 failed, 1 passed`. Každý padol z dôvodu,
 ktorý mal zachytiť: neošetrená `OperationalError`, parameter v texte chyby,
 chýbajúci záznam o štarte a pri F-04 presne ten `AdminShutdown` ako v P3b.
+
+### Nezávislá kontrola a beh 5
+
+Dve nezávislé kontroly (subagenti): jedna proti zadaniu a podkladom
+(iba čítanie), druhá nad kódom, testami a skriptom (behy a vložené chyby
+v kópiách mimo repozitára). Nálezy a opravy:
+
+| # | Nález | Oprava |
+| - | ----- | ------ |
+| RV-C10-1 | Výklad `AdminShutdown` v odpovedi bol chybný — tvrdil, že databáza bežala ďalej. V P3a bola zastavená. | prepísané v zázname; rozlíšenie oboch príčin ukázal až beh 4 |
+| RV-C10-2 | „Nelogovať OVERLAP" stálo aj na argumente o počtoch. `409` však vracia sedem kódov a riadok nemá čas. | zdôvodnenie prepísané |
+| RV-C10-3 | F-04 je nové správanie mimo mandátu C10. Text to zakrýval („nie nové správanie"). | priznané, alternatíva (iba issue) uvedená |
+| RV-C10-4 | Záznam nebol „krátky" — tabuľka až za 170 riadkami podkladov. | záznam presunutý na začiatok sekcie, bunky skrátené |
+| RV-C10-5 | Skript pri `BLOCKED` kvôli cudziemu kontajneru ten kontajner vo `finally` zmazal (overené behom). | maže iba kontajner, ktorý sám vytvoril (`fed795d`). Overené: `BLOCKED`, kód `2`, cudzí kontajner ostal. |
+| RV-C10-6 | Handler chytal iba `DBAPIError`. `TimeoutError` vyčerpaného poolu a `PendingRollbackError` ostali bez záznamu — práve pod záťažou. | `SQLAlchemyError`, test pre päť druhov poruchy, mutácia `L2b` |
+| RV-C10-7 | Čas v UTC nestrážil žiadny test. Bez prevodu bolo pri `TZ=Europe/Prague` všetko zelené a čas o hodinu zlý — rovnaký druh chyby ako F-01. | test s `TZ=Europe/Prague`, mutácia `L1` |
+| RV-C10-8 | Drobné: bez čísla procesu sú záznamy pri `--workers` nerozlíšiteľné; regex verzie v skripte zachytil `127.0.0.1`; skript pri chybe padol bez súhrnu a `BLOCKED` v P4 vypísal `PASS`; slabé `"500" in`; riadiaci znak z cesty by prešiel do záznamu; mutácie pomenované inak než zistenia; 120 namiesto 132 riadkov; telo `500` sa nekontrolovalo; identita behu nesledovala `scripts/`. | `[%(process)d]` vo formáte; verzia hľadaná za menom `swilab`; `NEDOKONCENA` a kód `3`; `-> 500:`; cesta cez `quote()` (nový riadok odstráni už Starlette); mutácie `L1`–`L4` podľa zistení; čísla opravené; kontrola tela; `scripts/` v identite |
+| ponechané | `hide_parameters` neskryje hodnotu v `DETAIL`; duplicity pri `--log-config` s root handlerom. | zapísané v `logs.py` a v „Čo C10 nepokrýva" |
+
+**Testy pred kódom:** `962eabd` → `4 failed, 8 passed`. Padli `TimeoutError`,
+`PendingRollbackError`, číslo procesu a riadiaci znak. Test času v UTC prešiel
+už pred zmenou — stráži správanie, ktoré kód mal. Jeho silu dokladá mutácia
+`L1`.
+
+**Beh 5** — kód [`ea55a6f`](https://github.com/thspowered/SWI-LAB/commit/ea55a6f),
+2026-11-22 17:30 UTC, Docker 28.3.2 (skript ho od review vypisuje). P1 – P4
+**PASS**, návratový kód `0`. Telo `500` je `Internal Server Error` bez
+detailov. Záznam poruchy má 152 riadkov s tracebackom, v `app.log` nie je
+ani jeden výskyt `parameters`. `SIGINT` → nový štart do 0,34 s.
+
+**`scripts/ci_check.sh` na `ea55a6f`:** `322 passed` (aj pri
+`PGTZ=Europe/Prague`), **51 mutácií, žiadna neprežila** (C10: `F04`, `L1`,
+`L2`, `L2b`, `L3`, `L4` — každú zachytí test, ktorý ju má chrániť),
+`TC-C08-01..03` PASS, wheel `swilab-0.4.1-py3-none-any.whl`
+`71239070d792617b1fb4f88064956bad88c09d3dc392b1b74b786f8b7bdf345b` (macOS
+arm64 — Linux v CI sa overí v PR).
 
 ### Čo C10 nepokrýva
 
@@ -2415,9 +2455,16 @@ chýbajúci záznam o štarte a pri F-04 presne ten `AdminShutdown` ako v P3b.
   Výpadok medzi `COMMIT` a odpoveďou dáva skutočne neznámy výsledok
   a deterministicky sa vyvolať nedá. Platí pravidlo „najprv prečítať stav,
   až potom opakovať",
-- **iné neošetrené výnimky** (chyba v kóde, `sqlalchemy.exc.TimeoutError`
-  vyčerpaného poolu) — stále po starom: dva záznamy bez času a uvicorn
-  zatvorí spojenie (O-2),
+- **iné neošetrené výnimky** (chyba v kóde) — stále po starom: dva záznamy
+  bez času a uvicorn zatvorí spojenie (O-2). Poruchy SQLAlchemy vrátane
+  `TimeoutError` vyčerpaného poolu handler od review zachytí, vyvolaná bola
+  ale iba podvrhnutím v teste, nie skutočnou záťažou,
+- **hodnoty v správe databázy** — `hide_parameters` skryje parametre SQL,
+  nie hodnotu, ktorú databáza sama vypíše (`DETAIL: Key (email)=(…) already
+  exists`, `Failing row contains (…)`, overené v review). Cez dnešné API
+  sa to dá vyvolať iba chybou v kóde,
+- **vlastná konfigurácia logovania** (`uvicorn --log-config` s handlerom na
+  root) — záznamy by boli dvakrát. Postup je v `logs.py`,
 - **nečisté zastavenie** (`SIGKILL`, pád procesu) — testovaný bol iba
   `SIGINT`. Záznam `stop:` by chýbal, čo je samo osebe stopa,
 - **súbežné poruchy** — tvrdenie L-2 o priraďovaní záznamov pri súbehu je
