@@ -2198,3 +2198,99 @@ reštart), je Expected **prevádzkové očakávanie tímu** a tak je aj označen
 predvolenou konfiguráciou. Očakávame prístupové riadky a traceback chyby,
 **bez času**. Ak sa to potvrdí, chýba „kedy" — doplníme minimálny záznam
 a pokus zopakujeme.
+
+### Vykonanie na pôvodnom kóde (Actual, beh 3)
+
+**Testovaný kód:** `8200655` — kód `c09-release` (RC 0.4.0), skript z commitu
+`e603b38`. 2026-11-22 17:00 UTC, macOS 26.6.2 arm64, Python 3.12.11 (venv
+z `requirements-dev.lock`), Docker 28.3.2, PostgreSQL 16.15.
+Príkaz: `python scripts/c10_provoz.py` → návratový kód `1`.
+
+| Beh | Commit skriptu | Čo sa stalo |
+| --- | -------------- | ----------- |
+| 1 | `ab3dc68` | skript spadol pred P1: `fetchall()` po `INSERT` — chyba skriptu |
+| 2 | `ab3dc68` + necommitnutá oprava `fetchall()` | P1 – P3a prebehli, v P3b skript spadol na vlastnej chybe (`has()` — kolízia mena `status`). **Pozorovanie:** `GET /health` hneď po `500` skončil `Connection reset by peer`. Uvicorn po neošetrenej výnimke spojenie zatvorí a klient poslal ďalšiu požiadavku tým istým keep-alive spojením. Odvtedy skript posiela každú požiadavku novým spojením (`e603b38`). |
+| 3 | `e603b38` | úplný beh — výsledky nižšie |
+
+| ID | Actual — výsledok | Actual — stav (SQL) | Verdikt |
+| -- | ----------------- | ------------------- | ------- |
+| P1 | `201 DRAFT` → `200 CONFIRMED` | `B1` `CONFIRMED`, interval bez zmeny, žiadna blokujúca dvojica | **PASS** |
+| P2 | `201 DRAFT` → `409 {"code":"OVERLAP", …}` | `B1` bez zmeny, `B2` `DRAFT`, žiadna blokujúca dvojica | **PASS** |
+| P3a | počas výpadku `500 Internal Server Error` (text, bez detailov), `/health` počas výpadku `200 {"status":"ok"}`; po `docker start` jedno opakovanie → `200 CONFIRMED` bez reštartu aplikácie | pred opakovaním `B3` `DRAFT`, `B1` `CONFIRMED`; po opakovaní `B3` `CONFIRMED`, žiadna blokujúca dvojica | **PASS** |
+| P3b | po `docker restart` **prvá** požiadavka `500`, druhá `200 UNAVAILABLE [B1]` | `B1` `CONFIRMED` | **FAIL** |
+| P4 | `SIGINT` → kód `0` za 0,35 s; po štarte `/health` `200`, dostupnosť `UNAVAILABLE [B1]`, `B4` `201` → `200 CONFIRMED` | `B1`, `B3`, `B4` `CONFIRMED`, žiadna blokujúca dvojica | **PASS** |
+
+**Čo ukázal log** (skript nahrádza UUID menami, rámce tracebacku iba počíta).
+Pri P3a:
+
+```
+INFO:     127.0.0.1:60528 - "POST /reservations/B3/confirm HTTP/1.1" 500 Internal Server Error
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  ... 6 riadkov rámcov tracebacku
+psycopg.errors.AdminShutdown: terminating connection due to administrator command
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  ... 113 riadkov rámcov tracebacku
+sqlalchemy.exc.OperationalError: (psycopg.errors.AdminShutdown) terminating connection due to administrator command
+[SQL: SELECT reservations.id, … FROM reservations WHERE reservations.id = %(pk_1)s::UUID FOR UPDATE]
+[parameters: {'pk_1': UUID('B3')}]
+INFO:     127.0.0.1:60529 - "GET /health HTTP/1.1" 200 OK
+```
+
+Pri P4 (zastavenie a nový štart):
+
+```
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [29749]
+INFO:     Started server process [29754]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8010 (Press CTRL+C to quit)
+```
+
+Pri P1 a P2 sú v logu iba prístupové riadky (`… /confirm HTTP/1.1" 200 OK`,
+`… 409 Conflict`). Kód `OVERLAP` v logu nie je.
+
+**Zistenia:**
+
+| # | Zistenie | Dôsledok |
+| - | -------- | -------- |
+| L-1 | **Žiadny riadok nemá čas.** „Kedy" sa dalo určiť iba z hodín skriptu, nie z logu. | Hypotéza sa potvrdila — chýba podstatná informácia. |
+| L-2 | Operácia (cesta v prístupovom riadku) a typ problému (traceback) sú **dva samostatné záznamy**. Spája ich iba poradie. Pri súbežných požiadavkách by sa nedalo povedať, ktorá chyba patrí ku ktorej požiadavke. Jedna porucha = 120 riadkov. | Chýba jeden záznam s časom, operáciou, typom a výsledkom. |
+| L-3 | Traceback obsahuje **parametre SQL**. Tu je to UUID rezervácie, pri iných príkazoch aj UUID používateľa (`requested_by`), teda identifikátor osoby. | Do pridaného záznamu nesmie ísť. |
+| L-4 | Zastavenie a štart sú viditeľné, ale **bez času, bez verzie aplikácie** a bez cieľovej databázy. | Z logu sa nedá povedať, ktorá verzia kedy bežala. |
+| F-04 | **P3b: po reštarte databázy prvá požiadavka skončí `500`.** Pool vydal spojenie, ktoré databáza pri vypnutí ukončila (`AdminShutdown`). SQLAlchemy to zistí až pri použití, vtedy celý pool zneplatní a druhá požiadavka už prejde. Aj `500` v P3a bolo také mŕtve spojenie, nie `Connection refused`. | Po každom reštarte databázy dostane prvý používateľ chybu. Pri potvrdení nevie, či sa zapísalo — zlyhal síce prvý príkaz (`SELECT … FOR UPDATE`), ale to vidí iba log. |
+| O-1 | `/health` počas výpadku databázy hlási `200 ok`. Hovorí iba „proces beží", nie „vie obslúžiť požiadavku". | Monitoring nad `/health` by výpadok nevidel. Zmena kontraktu `/health` nie je v rozsahu C10 — otvorené. |
+| O-2 | Po neošetrenej výnimke uvicorn zatvorí spojenie (beh 2). | Iba artefakt klienta. Ošetrená výnimka spojenie nezatvára. |
+
+**Rozhodnutie o logovaní doménového zamietnutia (P2): nelogovať.**
+`409 OVERLAP` je bežný, špecifikovaný výsledok (REQ-04), nie porucha.
+Klient dostane kód aj dôvod v odpovedi a stav je v databáze. Prístupový
+riadok so `409` už existuje a stačí na spočítanie zamietnutí. Záznam
+aplikácie by pridal šum (zamietnutie pri obsadenom prístroji je očakávané)
+a s ním aj identifikátor používateľa. Audit („kto sa kedy pokúsil") špecifikácia
+nepožaduje. Keby ho bolo treba, patrí do databázy, nie do logu. Zmenili by sme
+to, keby podpora potrebovala odpovedať „prečo mi to neprešlo" — vtedy
+INFO s ID rezervácie a kódom, bez osoby.
+
+**Rozhodnutie o zmene (pred kódom):**
+
+1. **Jeden záznam pre technickú poruchu databázy:** ERROR s časom v UTC,
+   operáciou (metóda + cesta), triedou chyby a správou databázy
+   a výsledkom `500`. Traceback ostane pripojený, ale **bez parametrov SQL**
+   (`hide_parameters`, L-3). Odpoveď klientovi sa nemení — `500`, text
+   `Internal Server Error`, bez detailov.
+2. **Štart a zastavenie:** INFO s časom, verziou a cieľovou databázou
+   (`host:port/meno`, bez používateľa a hesla).
+3. **F-04:** pool spojenie pred vydaním overí (`pool_pre_ping`) a mŕtve
+   nahradí. Cena: jeden krátky dotaz pri každom vydaní spojenia. Je to
+   oprava nálezu, nie nové správanie: Expected P3b bolo zapísané pred behom.
+   Rovnako sa v C07 opravili F-01 a F-02 — test, mutácia, evidence.
+4. **Verzia 0.4.1:** kód sa mení, takže wheel už nie je RC 0.4.0
+   z `c09-release`. Patch verzia zabezpečí, aby názov artefaktu neklamal.
+   O vydaní sa v C10 nerozhoduje.
