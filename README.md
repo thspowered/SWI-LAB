@@ -350,6 +350,55 @@ bez `[dev]`. Hlavičku súborov zachovaj.
 | **Obnova / rollback** | Rollback kódu **nevráti dáta**: dáta legálne vo v0.4 sú podľa v0.2 porušením BR-02 (overené). Postup `scripts/cr08_rollback.sql` → kód v0.3 → `scripts/cr08_forward.sql` → kód v0.4 **raz vyskúšaný nad dátami**, 8 krokov v evidence. Aplikácia musí pri rollbacku stáť. Prestavba podľa `ADR-02` dáta zmaže (bez volume). |
 | **Rozhodnutie o RC** | **CONDITIONAL** — owner tím; navrhol T. Krišica, potvrdil T. Hrubý v review 2026-11-18. Tri dôkazy, pre ktoré bolo pôvodne HOLD, sú doplnené: (1) špecifikácia v0.4 schválená (PR #14), (2) peer review kódu (PR #15), (3) čistý checkout druhým členom s rovnakým hashom wheelu. **Podmienky / známe obmedzenia:** víkendová diera (`CA-1`); žiadateľ ani vedúci nedostanú oznámenie (I-01, TBD-03/09); lock bez hashov balíčkov a mimo Windows; prestavba DB maže dáta (`ADR-02`); merge iba cez merge commit, inak sa identita artefaktu zmení. Zmenu na READY by priniesli oznámenia (TBD-03) a lock s hashmi. Zelená CI nie je súhlas s vydaním. |
 
+## C10 — Prevádzka: čo sa v systéme stalo a ako to poznáme
+
+Štyri situácie — úspešné potvrdenie, zamietnutá kolízia, výpadok databázy
+s obnovou a reštart aplikácie — na izolovanej inštancii. Záznam, logy
+a odpovede na otázky zo zadania sú v
+[evidence, časť C10](docs/evidence-and-evolution.md#c10--prevádzka-čo-sa-v-systéme-stalo-a-ako-to-poznáme).
+
+```bash
+python scripts/c10_provoz.py     # návratový kód 0 = všetky situácie PASS
+```
+
+Skript si vytvorí **vlastný** kontajner `swilab-c10-db` (port 5434) a aplikáciu
+spustí na porte 8010. Vývojovú databázu `swilab-db` nezastavuje ani nemení,
+takže môže bežať popri nej. Na konci kontajner odstráni (`C10_KEEP=1` ho
+nechá). Vypíše log aplikácie po situáciách a cestu k celému `app.log`.
+
+Aplikácia od verzie 0.4.1 loguje na `stderr` iba **technickú poruchu
+databázy** a **štart a zastavenie**. Pri poruche je to jeden záznam ERROR:
+riadok s časom v UTC, číslom procesu, operáciou, typom a výsledkom, za ním
+traceback bez parametrov SQL. Štart a zastavenie nesú čas, verziu a cieľovú
+databázu bez hesla. Úspech ani doménové zamietnutie zámerne nie. Po
+reštarte databázy pool mŕtve spojenie nahradí (nález F-04). Pri vlastnej
+konfigurácii logovania (`--log-config`) definuj aj logger `swilab`
+(`src/swilab/logs.py`).
+
+## C10 Definition of Done
+
+- [x] každá situácia má Expected **pred** behom — `3bd6670`, prvý beh až
+  v ďalšom commite
+- [x] skutočná reakcia a stav overený **mimo logu** — HTTP odpoveď a SQL novým
+  spojením, BR-02 vlastným dotazom; pri výpadku najprv stav, až potom
+  jedno opakovanie
+- [x] technická porucha na izolovanej inštancii — `docker stop/start`
+  a `docker restart` vlastného kontajnera, iba testovacie dáta
+- [x] chýbajúca informácia v logu doplnená a pokus zopakovaný — čas, jeden
+  záznam poruchy, verzia pri štarte (L-1 až L-4); testy pred kódom
+  (`5a9f882`, 4 červené), kód `57e63fa`, po review `962eabd` (4 červené)
+  a `ea55a6f`; mutácie `F04`, `L1` až `L4` (číslo = zistenie) a `L2b`
+- [x] dve nezávislé kontroly — nálezy RV-C10-1 až 8 opravené alebo priznané
+  (evidence, *Nezávislá kontrola a beh 5*); `ci_check.sh` na `ea55a6f`:
+  `322 passed`, 51 mutácií, 0 prežilo
+- [x] rozhodnutie, či logovať doménové zamietnutie — nie, so zdôvodnením
+- [x] krátky záznam v tabuľke zo zadania, odpovede na tri otázky, testovaný
+  commit, čo C10 nepokrýva. Žiadny pokus nebol `BLOCKED`.
+- [x] nájdené a priznané: F-04 (prvá požiadavka po reštarte databázy `500`)
+  opravené; `/health` počas výpadku hlási `ok` — otvorené ako **I-04**
+- [x] verzia **0.4.1** — kód sa zmenil, RC 0.4.0 ostáva `c09-release`; o vydaní
+  sa v C10 nerozhoduje
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.4
@@ -357,4 +406,4 @@ bez `[dev]`. Hlavičku súborov zachovaj.
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure, C08 Change Request `CR-08`
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia, architektúra C03 (ADR-01), detailed design C05
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03, C05, C07 (nálezy, register rizík) a C08 (baseline, test cases)
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03, C05, C07 (nálezy, register rizík), C08 (baseline, test cases), C09 (CI, release) a C10 (prevádzka a logy)

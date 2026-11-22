@@ -31,8 +31,21 @@ def create_db_engine(url, **kwargs) -> Engine:
     po cakani na zamok vidiet zapis, ktory medzitym commitol sused. Pasmo
     session UTC (F-01) zarucuje, ze casy z databazy maju vzdy offset 0.
     Oboje nastavujeme vyslovne a nespoliehame sa na predvolby servera.
+
+    pool_pre_ping (F-04 z C10): po restarte databazy pool vydal spojenie,
+    ktore databaza medzitym ukoncila, a prva poziadavka skoncila 500. Ping
+    pri vydani spojenia take spojenie nahradi novym. hide_parameters (L-3
+    z C10): chyba databazy ide s tracebackom do logu a parametre SQL
+    (napr. UUID pouzivatela) v nej byt nemaju.
     """
-    engine = create_engine(url, future=True, isolation_level="READ COMMITTED", **kwargs)
+    engine = create_engine(
+        url,
+        future=True,
+        isolation_level="READ COMMITTED",
+        pool_pre_ping=True,
+        hide_parameters=True,
+        **kwargs,
+    )
     event.listen(engine, "connect", _session_in_utc)
     return engine
 
