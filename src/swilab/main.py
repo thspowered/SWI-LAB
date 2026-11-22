@@ -3,7 +3,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy.exc import DBAPIError
+from urllib.parse import quote
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from swilab import logs
 from swilab.api.reservations import router as reservations_router
@@ -71,8 +73,8 @@ async def domain_error_handler(request: Request, exc: DomainError) -> JSONRespon
     )
 
 
-@app.exception_handler(DBAPIError)
-async def database_error_handler(request: Request, exc: DBAPIError) -> PlainTextResponse:
+@app.exception_handler(SQLAlchemyError)
+async def database_error_handler(request: Request, exc: SQLAlchemyError) -> PlainTextResponse:
     """Technicka porucha databazy (C10, P3a).
 
     Predtym ju zachytil az uvicorn: pristupovy riadok a traceback boli dva
@@ -80,14 +82,20 @@ async def database_error_handler(request: Request, exc: DBAPIError) -> PlainText
     operaciou, typom problemu a vysledkom; traceback ostava pripojeny, bez
     parametrov SQL (L-3). Odpoved klientovi je ta ista ako predtym.
 
+    SQLAlchemyError, nie iba DBAPIError: vycerpany pool (TimeoutError)
+    alebo PendingRollbackError nie su chyby ovladaca, a predsa su to
+    poruchy databazy - TimeoutError prave pod zatazou (review C10).
+    Ostatne neosetrene vynimky (chyby v kode) handler zamerne nechytaju.
+
     Klient z 500 nevie, ci sa zapis vykonal. Cesta v zazname hovori, stav
-    ktorej rezervacie treba pred opakovanim overit v databaze.
+    ktorej rezervacie treba pred opakovanim overit v databaze. Je to vstup
+    klienta, preto zakodovana - riadiaci znak sa do logu nedostane.
     """
-    orig = exc.orig if exc.orig is not None else exc
+    orig = getattr(exc, "orig", None) or exc
     detail = (str(orig).splitlines() or [""])[0]
     log.error(
         "%s %s -> 500: chyba databazy %s (%s.%s: %s)",
-        request.method, request.url.path, type(exc).__name__,
+        request.method, quote(request.url.path), type(exc).__name__,
         type(orig).__module__, type(orig).__qualname__, detail,
         exc_info=exc,
     )

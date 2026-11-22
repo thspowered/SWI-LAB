@@ -41,6 +41,7 @@ DB = "src/swilab/db.py"
 MODELS = "src/swilab/models.py"
 MAIN = "src/swilab/main.py"
 API = "src/swilab/api/reservations.py"
+LOGS = "src/swilab/logs.py"
 
 #: Testy pridane v C05 - subory a staticke kontroly v spolocnom subore.
 C05_FILES = ("tests/test_transitions.py", "tests/test_lifecycle_contracts.py")
@@ -178,7 +179,7 @@ REASON_CHECK = "        if (self.rejection is None) != (self.reason is None):\n"
 #:           prepustila. Mutacia vracia presne ten stav, ktory review nasiel.
 #:           F04 je nalez z C10 (P3b) - rovnaky princip.
 #: D*      - zmena CR-08 (C09).
-#: L*      - zaznamy prevadzky z C10 (L-1 az L-4 v evidence).
+#: L*      - zaznamy prevadzky z C10; cislo = zistenie L-1 az L-4 v evidence.
 MUTATIONS = [
     ("M1", "_write_expired() necommituje",
      [(SERVICE, WRITE_EXPIRED, "    reservation.state = ReservationState.EXPIRED\n")]),
@@ -333,14 +334,20 @@ MUTATIONS = [
        "    # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost.")]),
     ("D11", "odpoved API neuvadza termin rozhodnutia (AC-06)",
      [(API, '        "decision_deadline": reservation.decision_deadline,\n', "")]),
-    # --- C10: prevadzka - nalez F-04 a zaznamy L-1 az L-4 ---
+    # --- C10: prevadzka - nalez F-04 a zaznamy L-1 az L-4 (cislo mutacie
+    # = cislo zistenia, ktore chrani) ---
     ("F04", "pool vyda spojenie bez overenia (bez pool_pre_ping)",
      [(DB, "        pool_pre_ping=True,\n", "")]),
-    ("L1", "chyba databazy nesie parametre SQL (bez hide_parameters)",
-     [(DB, "        hide_parameters=True,\n", "")]),
+    ("L1", "cas zaznamu v lokalnom pasme s priponou Z",
+     [(LOGS, "    formatter.converter = time.gmtime\n", "")]),
     ("L2", "porucha databazy dostane odpoved, ale ziadny zaznam",
      [(MAIN, "    log.error(\n", "    log.debug(\n")]),
-    ("L3", "zaznam o starte bez verzie",
+    ("L2b", "handler iba pre chyby ovladaca (DBAPIError)",
+     [(MAIN, "@app.exception_handler(SQLAlchemyError)\n",
+       "@app.exception_handler(__import__('sqlalchemy').exc.DBAPIError)\n")]),
+    ("L3", "chyba databazy nesie parametre SQL (bez hide_parameters)",
+     [(DB, "        hide_parameters=True,\n", "")]),
+    ("L4", "zaznam o starte bez verzie",
      [(MAIN, '        "start: swilab %s, databaza %s, schema sedi s modelmi",\n'
              "        app.version, _database_target(),\n",
        '        "start: swilab, databaza %s, schema sedi s modelmi",\n'

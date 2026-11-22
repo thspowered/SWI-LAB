@@ -91,7 +91,7 @@ def test_a_database_failure_is_one_record_with_time_operation_type_and_result(ca
     assert errors[0].exc_info is not None and errors[0].exc_info[1] is failure
     first_line = _swilab_formatter().format(errors[0]).splitlines()[0]
     assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z ", first_line)
-    assert f" ERROR swilab.main: POST {path} -> 500: " in first_line
+    assert f" [{os.getpid()}] ERROR swilab.main: POST {path} -> 500: " in first_line
     assert type(failure).__name__ in first_line
     message = str(failure.orig if isinstance(failure, DBAPIError) else failure).splitlines()[0]
     assert message in first_line
