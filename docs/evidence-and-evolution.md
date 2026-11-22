@@ -2479,3 +2479,147 @@ Linux x86_64, Python 3.12.16, `322 passed`, 51 mutácií, 0 prežilo,
 
 Wheel 0.4.1 nie je kandidát na vydanie. RC 0.4.0 ostáva identifikovaný tagom
 `c09-release` a hashom `cf090f0b…626ef` (README, C09).
+
+## I-02 — Meranie serializácie na prístroj (ADR-01)
+
+Issue **I-02** (C07): „Serializácia na prístroj (ADR-01) nie je zmeraná."
+Opatrenie znelo: do 2026-11-09 rozhodnúť a zapísať pri ADR-01 — buď merateľné
+kritérium a meranie, alebo tvrdenie o škálovaní stiahnuť. **Termín sme
+nedodržali**, meranie je z 2026-11-22, 13 dní po termíne.
+
+Volíme meranie. Časť vzniká v troch commitoch: návrh a kritériá **pred**
+prvým meraním (tento commit), skript a výsledky s rozhodnutím. **Kód
+aplikácie sa v I-02 nemení.** Ak meranie ukáže potrebu zmeny, je to podklad
+pre Change Request, nie súčasť merania.
+
+### Čo ADR-01 tvrdí a čo treba overiť
+
+ADR-01, prijatý negatívny dôsledok 2: *zámok nad riadkom prístroja
+serializuje všetky potvrdenia a schválenia pre ten istý prístroj; pri
+desaťnásobku súbežných rezervácií (future pressure z C01) je to bod, ktorý
+treba merať.* E2 k tomu dodáva, že rôzne prístroje bežia súbežne ďalej
+a vytváranie `DRAFT` zámok neblokuje. Druhé tvrdenie už stráži test (zámok
+`FOR KEY SHARE` počas držaného zámku strážcu, `test_lifecycle_contracts.py`).
+Prvé nemá žiadne číslo. ADR-01 sa má znovu otvoriť, keď *meranie ukáže, že
+serializácia na prístroj je úzke hrdlo*.
+
+Meriame tri veci:
+
+1. či BR-02 drží aj pri desaťnásobnom súbehu — testy ho overujú pri dvoch
+   súčasných operáciách,
+2. koľko stojí čakanie na zámok pri desaťnásobnom súbehu na jeden prístroj,
+3. či horúci prístroj spomalí potvrdenia na iných prístrojoch.
+
+### Hypotézy z čítania kódu (pred meraním)
+
+- **H-1 — kritická sekcia môže rásť s objemom celej tabuľky.** Zámok sa drží
+  od `_lock_instrument()` po commit: dotaz na prekryv, `UPDATE` a `COMMIT`.
+  Tabuľka `reservations` nemá index na `instrument_id`, iba primárny kľúč.
+  Dotaz na prekryv teda pravdepodobne číta celú tabuľku vrátane histórie
+  všetkých prístrojov a čas držania zámku by rástol s počtom všetkých
+  rezervácií, nie s vyťažením prístroja. Plán dotazu skript zaznamená
+  (`EXPLAIN`).
+- **H-2 — čakanie na zámok drží spojenie z poolu.** Pool má predvolených
+  5 + 10 spojení a na voľné čaká najviac 30 s. Synchrónne endpointy bežia
+  v threadpoole s predvolenými 40 vláknami. Požiadavka čakajúca na zámok
+  prístroja drží spojenie, takže pri viac ako 15 súbežných požiadavkách na
+  jeden prístroj by mohli čakať aj požiadavky na iné prístroje — nie na
+  zámok, ale na spojenie.
+- **H-3 — pri dnešnom objeme je kritická sekcia krátka** a serializácia nie
+  je úzke hrdlo. Toto má meranie potvrdiť alebo vyvrátiť číslom.
+
+### Model záťaže (predpoklad tímu)
+
+Systém nemá prevádzku, z ktorej by sa dala záťaž odčítať. Hodnoty sú
+**predpoklad tímu** — rovnako ako 48 h v CR-08 — a dajú sa napadnúť. Preto
+meriame aj krivky E-1 a E-2, z ktorých sa výsledok dá odčítať pre iný
+predpoklad.
+
+| Veličina | dnes | 10× (future pressure C01) |
+| -------- | ---- | ------------------------- |
+| súbežné potvrdenia na jeden prístroj v špičke (zverejnenie termínov) | 5 | 50 |
+| riadkov v tabuľke `reservations` | 10 000 | 100 000 |
+
+10 000 riadkov ≈ rok prevádzky: 20 prístrojov × 2 rezervácie denne × 250
+pracovných dní. Future pressure hovorí o súbežnosti. Objem násobíme tiež,
+lebo viac súbežných rezervácií znamená aj viac uložených.
+
+### Kritériá — rozhodujú o I-02
+
+Všetky pri modeli 10×: 50 súbežných požiadaviek, 100 000 riadkov.
+
+| ID | Scenár | PASS, ak |
+| -- | ------ | -------- |
+| **K-1** | **Kolízia pod záťažou.** 50 používateľov naraz potvrdí 50 `DRAFT` s **rovnakým** intervalom na jednom prístroji. | v každom opakovaní presne 1× `200 CONFIRMED` a 49× `409 OVERLAP`; žiadna iná odpoveď (5xx, timeout, bez odpovede); SQL: jedna blokujúca rezervácia, BR-02 drží |
+| **K-2** | **Serializácia na jeden prístroj.** 50 používateľov naraz potvrdí 50 `DRAFT` s **rôznymi**, nekolidujúcimi intervalmi na jednom prístroji. Každé potvrdenie uspeje a commitne pod zámkom — najhorší prípad držania zámku. | všetky `200 CONFIRMED`; **p95 času odozvy ≤ 1 s** |
+| **K-3** | **Sused horúceho prístroja.** Spolu s K-2 (50 potvrdení na prístroji A) potvrdí 5 ďalších používateľov po jednej rezervácii na 5 iných prístrojoch, uvoľnení tou istou bariérou. | všetky `200`; **p95 času odozvy týchto 5 požiadaviek ≤ 1 s** |
+
+**Prečo 1 s:** hranica, do ktorej používateľ vníma odozvu interaktívnej
+operácie ako plynulú a nečaká vedome (Nielsen, *Usability Engineering*,
+1993: hranice 0,1 s / 1 s / 10 s). Potvrdenie rezervácie je interaktívna
+operácia.
+
+**Prečo p95, nie priemer:** pri serializácii čaká posledná požiadavka na
+všetky pred ňou. Priemer by ju skryl.
+
+**Rozhodovacie pravidlo** (zapísané pred meraním):
+
+- **K-1 FAIL** → chyba správnosti pod záťažou: nový nález s vyššou prioritou
+  než I-02.
+- **K-1, K-2 aj K-3 PASS** → I-02 sa uzavrie: pri modeli 10× serializácia nie
+  je úzke hrdlo. ADR-01 sa neotvára, dôsledok 2 dostane čísla a spúšťač
+  „meranie ukáže úzke hrdlo" sa nahradí konkrétnou hranicou z E-1 a E-2.
+- **K-2 alebo K-3 FAIL** → rozhodne porovnanie s rovnakým počtom požiadaviek
+  na **rôzne** prístroje (E-1). Ak je p95 na jednom prístroji aspoň 2× horšie,
+  úzke hrdlo je zámok a spúšťač ADR-01 je naplnený. Ak sú podobné, úzke hrdlo
+  je inde (pool, threadpool, databáza): ADR-01 sa to netýka a vznikne issue
+  pre nasadenie.
+
+### Prieskum — bez PASS/FAIL
+
+| ID | Čo | Prečo |
+| -- | -- | ----- |
+| **E-0** | model „dnes": scenáre K-1 a K-2 pri 5 súbežných požiadavkách a 10 000 riadkoch | porovnanie s 10× |
+| **E-1** | krivka podľa súbehu: 1, 5, 10, 25, 50, 100, 200 požiadaviek na **jeden** prístroj (ako K-2) a na **rôzne** prístroje (každá na inom), 100 000 riadkov | kde sa p95 dostane nad 1 s a či rastie rýchlejšie pre jeden prístroj (zámok) alebo pre oba rovnako (pool, H-2) |
+| **E-2** | krivka podľa objemu: 0, 10 000, 100 000 a 1 000 000 riadkov, 50 požiadaviek na jeden prístroj | H-1: rastie čas s objemom celej tabuľky? |
+| **E-3** | ako E-2 pri 100 000 a 1 000 000 riadkoch, ale s indexom na `reservations(instrument_id)`, vytvoreným **iba v izolovanej databáze merania** | ak H-1 platí, či ho index odstráni — podklad pre prípadný CR, nie zmena kódu |
+
+### Metóda
+
+- **Inštancia:** ako v C10 — vlastný kontajner `swilab-i02-db` (PostgreSQL 16,
+  port 5435) a aplikácia `uvicorn` na porte 8020. Jeden proces, bez vlastnej
+  konfigurácie, predvolený pool aj threadpool. Vývojová databáza `swilab-db`
+  sa nemení.
+- **Meraná operácia:** iba potvrdenie (OP-03) cez HTTP. Prístroje sú bez
+  schvaľovania, potvrdenie vedie do `CONFIRMED`. Prístroje, používatelia,
+  certifikáty, `DRAFT` rezervácie aj objem na pozadí vkladá SQL — ich vznik
+  sa nemeria.
+- **Objem na pozadí:** rezervácie `CONFIRMED` na 20 ďalších prístrojoch,
+  v minulosti, bez prekryvov (každá v inej hodine). Po každom vložení
+  `ANALYZE`.
+- **Súbeh:** N vlákien klienta, každé pošle jednu požiadavku novým spojením
+  (ako C10). Všetky uvoľní jedna bariéra naraz. Dávka v jednom okamihu je
+  najhorší prípad.
+- **Čas odozvy:** od odoslania požiadavky po prijatie celej odpovede, meraný
+  klientom.
+- **Opakovania:** každý bod má 1 zahrievací beh, ktorý sa zahodí, a 5
+  meraných behov. p50, p95 a max sa počítajú zo všetkých požiadaviek piatich
+  behov. Medzi behmi sa rezervácie merania zmažú (`DELETE` a `VACUUM`), objem
+  na pozadí ostáva.
+- **Stav:** po každom behu SQL novým spojením — počty stavov a BR-02
+  rovnakým dotazom ako v C08 a C10.
+- **Zaznamená sa:** commit, verzie Pythonu, Dockera a PostgreSQL, procesor;
+  pri každom objeme plán dotazu na prekryv (`EXPLAIN`).
+
+### Známe hrozby platnosti
+
+- klient aj server bežia na tom istom stroji a delia sa o procesor; pri 200
+  vláknach môže čas pridávať aj klient — bod N = 1 ukazuje réžiu,
+- databáza beží v Docker Desktop, teda vo virtuálnom stroji na macOS; `fsync`
+  pri commite sa správa inak než na serveri,
+- jeden proces uvicornu s predvolenými limitmi — nasadenie s `--workers` by
+  malo viac spojení aj vlákien,
+- dávka v jednom okamihu je umelý najhorší prípad, skutočné požiadavky
+  prichádzajú rozložene,
+- schválenie (`approve`) prechádza tým istým zámkom, meriame však iba
+  potvrdenie.
