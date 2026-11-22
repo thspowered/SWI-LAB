@@ -1,5 +1,6 @@
 """Mutacne overenie testov jednotky Reservation Lifecycle (C05),
-uzavretych nalezov z nezavisleho review (C06) a zmeny CR-08 (C09, D*).
+uzavretych nalezov z nezavisleho review (C06), zmeny CR-08 (C09, D*)
+a prevadzky z C10 (F04, L*).
 
 Otazka, na ktoru skript odpoveda: su testy odvodene z navrhu VAKUOVE,
 alebo naozaj padnu, ked sa navrh porusi?
@@ -175,6 +176,9 @@ REASON_CHECK = "        if (self.rejection is None) != (self.reason is None):\n"
 #:           prepustili, a vetvy, ktore nemali test.
 #: F*      - nalezy z C06 review, ktore sada na hodnotenej baseline db9c523
 #:           prepustila. Mutacia vracia presne ten stav, ktory review nasiel.
+#:           F04 je nalez z C10 (P3b) - rovnaky princip.
+#: D*      - zmena CR-08 (C09).
+#: L*      - zaznamy prevadzky z C10 (L-1 az L-4 v evidence).
 MUTATIONS = [
     ("M1", "_write_expired() necommituje",
      [(SERVICE, WRITE_EXPIRED, "    reservation.state = ReservationState.EXPIRED\n")]),
@@ -329,6 +333,18 @@ MUTATIONS = [
        "    # BR-07: schvaluje iba SUPERVISOR a nikdy nie vlastnu ziadost.")]),
     ("D11", "odpoved API neuvadza termin rozhodnutia (AC-06)",
      [(API, '        "decision_deadline": reservation.decision_deadline,\n', "")]),
+    # --- C10: prevadzka - nalez F-04 a zaznamy L-1 az L-4 ---
+    ("F04", "pool vyda spojenie bez overenia (bez pool_pre_ping)",
+     [(DB, "        pool_pre_ping=True,\n", "")]),
+    ("L1", "chyba databazy nesie parametre SQL (bez hide_parameters)",
+     [(DB, "        hide_parameters=True,\n", "")]),
+    ("L2", "porucha databazy dostane odpoved, ale ziadny zaznam",
+     [(MAIN, "    log.error(\n", "    log.debug(\n")]),
+    ("L3", "zaznam o starte bez verzie",
+     [(MAIN, '        "start: swilab %s, databaza %s, schema sedi s modelmi",\n'
+             "        app.version, _database_target(),\n",
+       '        "start: swilab, databaza %s, schema sedi s modelmi",\n'
+       "        _database_target(),\n")]),
 ]
 
 
