@@ -2440,7 +2440,10 @@ ani jeden výskyt `parameters`. `SIGINT` → nový štart do 0,34 s.
 `L2`, `L2b`, `L3`, `L4` — každú zachytí test, ktorý ju má chrániť),
 `TC-C08-01..03` PASS, wheel `swilab-0.4.1-py3-none-any.whl`
 `71239070d792617b1fb4f88064956bad88c09d3dc392b1b74b786f8b7bdf345b` (macOS
-arm64 — Linux v CI sa overí v PR).
+arm64). **Rovnaký hash v CI** PR #17
+([run 45050383758](https://github.com/thspowered/SWI-LAB/actions/runs/45050383758),
+Linux x86_64, Python 3.12.16, `322 passed`, 51 mutácií, 0 prežilo,
+`VSETKY KROKY PRESLI`).
 
 ### Čo C10 nepokrýva
 
