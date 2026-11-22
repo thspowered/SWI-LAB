@@ -8,10 +8,12 @@ Co skript urobi sam:
     vyvojovu databazu swilab-db (5433), nad ktorou bezi pytest, nezastavuje
     ani nemeni,
   - spusti aplikaciu (uvicorn, port 8010) nad touto databazou, stdout aj
-    stderr do suboru app.log - presne tak, ako ju spusta README,
+    stderr do suboru app.log - ako v README, iba bez --reload,
   - situacie vykona cez HTTP, stav cita SQL NOVYM spojenim priamo
     z databazy, log aplikacie zo suboru,
   - na konci aplikaciu zastavi a kontajner odstrani (C10_KEEP=1 ho necha).
+    Odstrani iba kontajner, ktory v tomto behu sam vytvoril - cudzi kontajner
+    s rovnakym menom je BLOCKED a ostane nedotknuty.
 
 Rovnako ako c08_baseline_tc.py neimportuje balik swilab - log ukazuje, ako
 aplikacia reagovala, o stave dat rozhoduje databaza.
@@ -22,7 +24,8 @@ Spustenie (Docker musi bezat, prostredie podla README):
 Premenne: C10_DB_PORT (5434), C10_APP_PORT (8010), C10_OUT (adresar pre
 app.log, predvolene novy v TMPDIR), C10_KEEP=1 (kontajner neodstranit).
 
-Navratovy kod: 0 = vsetky situacie PASS, 1 = niektora FAIL, 2 = BLOCKED.
+Navratovy kod: 0 = vsetky situacie PASS, 1 = niektora FAIL, 2 = BLOCKED,
+3 = chyba skriptu (neocakavana vynimka - verdikt neexistuje).
 Riadky LOG (uzitocnost logu) navratovy kod neovplyvnuju.
 """
 
@@ -34,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
@@ -78,6 +82,8 @@ S2 = _id("52")  # student, vlastnik B2 a B4
 #: Mena pre vypis. Rezervacie zaklada API, ich id sa doplnia za behu.
 NAMES: dict[str, str] = {str(R1): "R1", str(S1): "S1", str(S2): "S2"}
 IDS: dict[str, str] = {}
+#: True az ked tento beh kontajner sam vytvoril - iba vtedy ho smie zmazat.
+CREATED_CONTAINER = False
 
 DAY = (datetime.now(UTC) + timedelta(days=7)).replace(
     hour=0, minute=0, second=0, microsecond=0
@@ -137,6 +143,7 @@ class Situation:
     def __init__(self, sid: str, title: str) -> None:
         self.sid = sid
         self.passed = True
+        self.finished = False
         self.log_notes: list[str] = []
         Situation.all.append(self)
         print(f"\n=== {sid} - {title} ===")
@@ -146,9 +153,20 @@ class Situation:
         self.passed = self.passed and bool(condition)
         return bool(condition)
 
+    def needs(self, *names: str) -> bool:
+        """Rezervacie z predchadzajucich situacii. Ak chybaju, situacia sa
+        neda vykonat - FAIL, nie pad skriptu."""
+        missing = [name for name in names if name not in IDS]
+        if missing:
+            self.check(False, f"chyba {', '.join(missing)} z predchadzajucej situacie")
+        return not missing
+
     @property
     def verdict(self) -> str:
-        return "PASS" if self.passed else "FAIL"
+        if not self.passed:
+            return "FAIL"
+        # prerusena BLOCKED alebo chybou skriptu - PASS by klamal
+        return "PASS" if self.finished else "NEDOKONCENA"
 
 
 # --- Docker a databaza -----------------------------------------------------
@@ -159,6 +177,7 @@ def docker(*args: str) -> subprocess.CompletedProcess:
 
 
 def prepare_container() -> None:
+    global CREATED_CONTAINER
     try:
         docker("info", "--format", "{{.ServerVersion}}")
     except (FileNotFoundError, subprocess.CalledProcessError):
@@ -181,6 +200,7 @@ def prepare_container() -> None:
             "-e", f"POSTGRES_DB={DB_NAME}",
             "-p", f"127.0.0.1:{DB_PORT}:5432", "postgres:16",
         )
+        CREATED_CONTAINER = True
     except subprocess.CalledProcessError as exc:
         raise Blocked(
             f"databazovy kontajner sa nevytvoril: {exc.stderr.strip()}",
@@ -341,7 +361,9 @@ def show_log(lines: list[str]) -> None:
 TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 ERROR_TYPE_RE = re.compile(r"\b[A-Za-z]+(Error|Exception)\b")
 STATUS_5XX_RE = re.compile(r"\b5\d\d\b")
-VERSION_RE = re.compile(r"\b\d+\.\d+\.\d+(?!\.\d)\b")
+#: verzia hned za menom aplikacie - inak by sa za verziu pocitala aj adresa
+#: 127.0.0.1 v tom istom riadku
+VERSION_RE = re.compile(r"\bswilab \d+\.\d+\.\d+\b")
 
 
 def yes(flag: bool) -> str:
@@ -376,7 +398,7 @@ def log_lifecycle(situation: Situation, lines: list[str]) -> None:
     starts = [line for line in lines if re.search(r"start", line, re.I)]
     stop_time = any(TIME_RE.search(line) for line in stops)
     start_time = any(TIME_RE.search(line) for line in starts)
-    version = any("swilab" in line.lower() and VERSION_RE.search(line) for line in starts)
+    version = any(VERSION_RE.search(line) for line in starts)
     ok = bool(stops) and bool(starts) and stop_time and start_time and version
     note = (
         f"zastavenie={yes(bool(stops))} (cas {yes(stop_time)}), "
@@ -393,7 +415,7 @@ def call(method: str, path: str, **kwargs) -> httpx.Response | None:
     """None = odpoved neprisla (timeout, spojenie) - vysledok je NEZNAMY.
 
     Kazda poziadavka NOVYM spojenim: uvicorn po neosetrenej vynimke spojenie
-    zatvori (prvy beh: /health hned po 500 dostal po keep-alive spojeni
+    zatvori (beh 2: /health hned po 500 dostal po keep-alive spojeni
     "Connection reset by peer"). Opakovane spojenie by tak miesalo stav
     aplikacie s artefaktom klienta."""
     body = kwargs.get("json")
@@ -462,11 +484,14 @@ def p1_success(log: Log) -> None:
     s.check(is_state("B1", "CONFIRMED", (at(10), at(11))), "SQL: B1 CONFIRMED, interval bez zmeny")
     s.check(blocking_pairs() == [], "SQL: ziadna blokujuca dvojica (BR-02)")
     show_log(log.new_lines())
+    s.finished = True
 
 
 def p2_collision(log: Log) -> None:
     s = Situation("P2", "zamietnuta kolizia")
     log.mark()
+    if not s.needs("B1"):
+        return
     if not s.check(remember("B2", create(S2, at(10, 30), at(11, 30))),
                    "vytvorenie B2 (prekryv s B1, REQ-02): 201"):
         return
@@ -480,11 +505,14 @@ def p2_collision(log: Log) -> None:
     note = f"kod zamietnutia OVERLAP v logu={yes(logged_code)} (rozhodnutie tima v evidence)"
     print(f"    LOG INFO  {note}")
     s.log_notes.append("INFO - " + note)
+    s.finished = True
 
 
 def p3a_outage(log: Log) -> None:
-    s = Situation("P3a", "vypadok databazy pocas operacie a obnova")
+    s = Situation("P3a", "zastavena databaza a obnova")
     log.mark()
+    if not s.needs("B1"):
+        return
     if not s.check(remember("B3", create(S1, at(12), at(13))), "vytvorenie B3: 201"):
         return
     say(f"docker stop {CONTAINER}")
@@ -492,6 +520,10 @@ def p3a_outage(log: Log) -> None:
     response = confirm("B3", S1)
     s.check(response is not None and 500 <= response.status_code < 600,
             "potvrdenie B3 pocas vypadku: technicka chyba 5xx (nie 2xx, nie 409)")
+    # doplnene po review: klient nesmie dostat vnutorne detaily poruchy
+    s.check(response is not None and "Traceback" not in response.text
+            and "SQL" not in response.text and not ERROR_TYPE_RE.search(response.text),
+            "telo odpovede bez vnutornych detailov (traceback, SQL, nazov vynimky)")
     health = call("GET", "/health")
     say("POZOROVANIE /health pocas vypadku: "
         + ("bez odpovede" if health is None else f"{health.status_code} {health.text}"))
@@ -515,11 +547,14 @@ def p3a_outage(log: Log) -> None:
     lines = log.new_lines()
     show_log(lines)
     log_diagnostic(s, lines, f"/reservations/{IDS['B3']}/confirm")
+    s.finished = True
 
 
 def p3b_db_restart(log: Log) -> None:
     s = Situation("P3b", "restart databazy, ked aplikacia nic nerobi")
     log.mark()
+    if not s.needs("B1"):
+        return
     say(f"docker restart {CONTAINER}")
     docker("restart", CONTAINER)
     wait_for_db()
@@ -535,11 +570,14 @@ def p3b_db_restart(log: Log) -> None:
     show_log(lines)
     if first is None or first.status_code != 200:
         log_diagnostic(s, lines, f"/instruments/{R1}/availability")
+    s.finished = True
 
 
 def p4_app_restart(app: App, log: Log) -> None:
     s = Situation("P4", "restart aplikacie")
     log.mark()
+    if not s.needs("B1", "B3"):
+        return
     say("SIGINT aplikacii (ako Ctrl+C)")
     code = app.stop(10)
     s.check(code == 0, f"aplikacia skoncila s kodom 0 do 10 s (skutocne: {code})")
@@ -559,6 +597,7 @@ def p4_app_restart(app: App, log: Log) -> None:
     lines = log.new_lines()
     show_log(lines)
     log_lifecycle(s, lines)
+    s.finished = True
 
 
 # --- beh -------------------------------------------------------------------
@@ -578,15 +617,20 @@ def main() -> int:
     print(f"commit:    {git('rev-parse', 'HEAD')}")
     print(f"kod:       {git('log', '-1', '--format=%h', '--', 'src', 'pyproject.toml')}"
           " (posledny commit, ktory menil src/ alebo pyproject.toml)")
-    if git("status", "--porcelain", "--untracked-files=no", "--", "src", "pyproject.toml"):
-        print("POZOR:     src/ alebo pyproject.toml maju necommitnute zmeny")
+    if git("status", "--porcelain", "--untracked-files=no", "--", "src", "pyproject.toml", "scripts"):
+        print("POZOR:     src/, pyproject.toml alebo scripts/ maju necommitnute zmeny")
     print(f"python:    {sys.version.split()[0]}")
+    docker_version = subprocess.run(
+        ["docker", "version", "--format", "{{.Server.Version}}"], capture_output=True, text=True,
+    ).stdout.strip()
+    print(f"docker:    {docker_version or 'nezistene'}")
     print(f"databaza:  {MASKED_URL} (kontajner {CONTAINER}, postgres:16)")
     print(f"aplikacia: {BASE_URL}")
     print(f"log:       {app.log_path}")
     print(f"den D:     {DAY.date()} (UTC)")
 
     blocked = None
+    crashed = None
     try:
         try:
             httpx.get(f"{BASE_URL}/health", timeout=1)
@@ -604,9 +648,15 @@ def main() -> int:
         p4_app_restart(app, log)
     except Blocked as exc:
         blocked = exc
+    except subprocess.CalledProcessError as exc:
+        blocked = Blocked(f"prikaz {' '.join(exc.cmd[:2])} zlyhal: {exc.stderr.strip()}",
+                          "skontroluj Docker a skript zopakuj")
+    except Exception as exc:  # chyba skriptu - verdikt neexistuje
+        crashed = exc
+        traceback.print_exc()
     finally:
         app.stop(10)
-        if not KEEP:
+        if CREATED_CONTAINER and not KEEP:
             subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)
 
     print("\n=== suhrn ===")
@@ -615,11 +665,14 @@ def main() -> int:
         for note in s.log_notes:
             print(f"      LOG {note}")
     print(f"log aplikacie: {app.log_path}")
+    if crashed is not None:
+        print(f"CHYBA SKRIPTU - {type(crashed).__name__}: {crashed}")
+        return 3
     if blocked is not None:
         print(f"BLOCKED - {blocked.cause}")
         print(f"dalsi krok: {blocked.next_step}")
         return 2
-    return 0 if all(s.passed for s in Situation.all) else 1
+    return 0 if all(s.passed and s.finished for s in Situation.all) else 1
 
 
 if __name__ == "__main__":
