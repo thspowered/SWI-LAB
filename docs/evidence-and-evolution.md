@@ -1324,20 +1324,29 @@ plán skóre neznižuje.
   asi 1 000 000 rezervácií a 50 súbežných potvrdeniach na jeden prístroj
   prekročí p95 hranicu 1 s (meranie I-02, E-2).
 - **Počiatočné riziko:** L=1, I=2 → **LOW (2)**. Pri modeli 10× (100 000
-  riadkov) je rezerva desaťnásobná; aj tempom modelu 10× by tabuľka
-  1 000 000 riadkov dosiahla asi za desať rokov.
+  riadkov) je rezerva desaťnásobná (na druhom stroji asi 8,5-násobná, review
+  I-02); aj tempom modelu 10× by tabuľka 1 000 000 riadkov dosiahla asi za
+  desať rokov.
 - **Stratégia:** ACCEPT so spúšťačom — ošetrenie je pripravené a zmerané.
 - **Opatrenie / owner / termín:** pri spúšťači Change Request: index na
-  `reservations(instrument_id)`. CR musí vyriešiť aj ADR-02 — `create_all()`
+  `reservations(instrument_id, ends_at)`. Index iba na `instrument_id`
+  nestačí: rezervácia ostáva `CONFIRMED` aj po skončení, takže história
+  prístroja rastie s tabuľkou a takýto index ju nevynechá (review I-02,
+  RV-I02-1). CR musí vyriešiť aj ADR-02 — `create_all()`
   index do existujúcej tabuľky nepridá a `verify_schema()` indexy
   neporovnáva, takže index iba v modeli by na existujúcej databáze ticho
   chýbal. Owner: Tomáš Krišica.
-- **Dôkaz účinnosti ošetrenia:** E-3 — pri 1 000 000 riadkoch s indexom p95
-  168 ms namiesto 1 004 ms (index iba v izolovanej databáze merania).
+- **Dôkaz účinnosti ošetrenia:** pokus A z review I-02 — horúci prístroj
+  s vlastnou históriou (1/20 objemu), 1 000 000 riadkov: s indexom
+  `(instrument_id, ends_at)` p95 159 ms, s indexom iba na `instrument_id`
+  793 ms, bez indexu 1 153 ms. E-3 (prístroj bez histórie, index na
+  `instrument_id`) 168 ms namiesto 1 004 ms. Indexy iba v izolovanej databáze
+  merania.
 - **Očakávané reziduálne:** LOW (2) — akceptované, bez zmeny.
 - **Skutočné reziduálne:** **LOW (2)** — doložené meraním I-02 (pri 100 000
   riadkoch p95 276 ms).
-- **Prijatie:** návrh T. Krišica, potvrdí review I-02.
+- **Prijatie:** návrh T. Krišica, potvrdil T. Hrubý v review I-02
+  (2026-11-22) s opraveným indexom.
 - **Monitoring / trigger:** viac ako 300 000 riadkov v `reservations`;
   zavedenie migrácií (vtedy je index lacný, urobiť hneď); opakované meranie
   I-02 s p95 nad 0,5 s pri modeli 10×.
@@ -2717,7 +2726,9 @@ V logu aplikácie nie je ani jeden záznam ERROR, iba štart a zastavenie.
    `reservations(instrument_id)` túto závislosť odstráni** (E-3): pri
    1 000 000 riadkoch s indexom je p95 168 ms, takmer ako pri prázdnej
    tabuľke. Nie je to vlastnosť zámku z ADR-01, ale dotazu, ktorý sa pod ním
-   vykonáva.
+   vykonáva. *Doplnené v review (RV-I02-1):* platí, kým horúci prístroj nemá
+   vlastnú históriu — ako v E-3. S históriou závislosť odstráni až index
+   `(instrument_id, ends_at)`, pozri pokus A v časti *Review I-02*.
 4. **Pri malom objeme zámok nie je to, čo obmedzuje.** Pri prázdnej tabuľke
    pridá požiadavka v rade 2,9 ms; 50 požiadaviek na rôzne prístroje, teda
    bez spoločného zámku, prejde tempom 2,6 ms na požiadavku. S indexom je
@@ -2729,7 +2740,9 @@ V logu aplikácie nie je ani jeden záznam ERROR, iba štart a zastavenie.
    prístroje (138 ms). Zodpovedá to H-2 (požiadavky čakajúce na zámok držia
    spojenia z poolu), meranie však nerozlíši, či čakali na spojenie alebo na
    procesor. Tvrdenie z E2 „rôzne prístroje bežia súbežne ďalej" platí pre
-   zámok, nie pre celú aplikáciu.
+   zámok, nie pre celú aplikáciu. *Doplnené v review (RV-I02-2):* pokus B to
+   oddelil — sused čaká na spojenie z poolu, nie na procesor ani na
+   threadpool.
 6. **Kde p95 prekročí 1 s:** pri 100 000 riadkoch medzi 100 a 200 súbežnými
    potvrdeniami na jeden prístroj (pri 5,7 ms v rade okolo 175). Pri 50
    súbežných okolo 1 000 000 riadkov. Rezerva voči modelu 10× je teda asi
@@ -2749,7 +2762,8 @@ uzatvára.**
   riadkoch a do asi 1 000 000 riadkov pri 50 súbežných.
 - **Nové riziko R-08** — dotaz na prekryv bez indexu (bod 3). Dnes ho
   neriešime, rezerva v objeme je desaťnásobná. Ošetrenie je pripravené
-  a zmerané (E-3), ide však o zmenu schémy, teda Change Request. ADR-02 ho
+  a zmerané (E-3; *v review opravené na index `(instrument_id, ends_at)`,
+  RV-I02-1*), ide však o zmenu schémy, teda Change Request. ADR-02 ho
   sťažuje: `create_all()` index do existujúcej tabuľky nepridá
   a `verify_schema()` indexy neporovnáva. Index pridaný iba do modelu by na
   existujúcej databáze ticho chýbal.
@@ -2761,7 +2775,117 @@ uzatvára.**
   presná hodnota. Pri modeli 10× sa behy líšia o menej ako 3 %.
 - Meralo sa na jednom stroji (macOS, Docker Desktop). Iný stroj ani Linux
   sme nemerali; opakovanie je jeden príkaz, `python scripts/i02_meranie.py`.
+  *Doplnené v review (RV-I02-3):* druhý stroj dal rovnaký verdikt, hranice
+  okolo 140 súbežných a 850 000 riadkov; Linux ostáva nezmeraný.
 - Tabuľka bola po `VACUUM` bez mŕtvych riadkov. V prevádzke by ich dotaz bez
   indexu čítal tiež.
 - Meranie nie je súčasťou `ci_check.sh`: trvá minútu, potrebuje Docker a čas
   odozvy na zdieľanom stroji CI by nebol porovnateľný.
+
+### Review I-02 — druhý stroj a dva doplnkové pokusy (T. Hrubý, 2026-11-22)
+
+**Review.** PR #18 prešiel T. Hrubý proti issue I-02 a piatim bodom v popise
+PR. Text plánu je od `4df292e` bez zmeny — `git diff 4df292e 1e81df4` mení
+v pláne iba hlavičku registra a riadok I-02. Skript bol prečítaný pred
+spustením: vytvára iba vlastný kontajner a odstraňuje iba ten, ktorý sám
+vytvoril. Overené vlastným behom, nie iba čítaním.
+
+**Druhý stroj — `python scripts/i02_meranie.py`** na `1e81df4` (kód
+aplikácie `ea55a6f`), macOS 26.6.2 arm64 (Apple M4 Pro, 14 jadier), Python
+3.12.11 (prostredie z `requirements-dev.lock`), Docker 28.3.2, PostgreSQL
+16.15. Na stroji počas behov bežali aj iné, nesúvisiace kontajnery. Dva úplné
+behy, 2026-11-22 20:18 a 20:19 UTC, oba s návratovým kódom `0`.
+
+| | Stroj autora (beh 2) | Druhý stroj (beh 1 / beh 2) |
+| - | -------------------- | --------------------------- |
+| **K-1** | 1× `200`, 49× `409 OVERLAP` | rovnako vo všetkých 12 dávkach, BR-02 0 dvojíc — **PASS** |
+| **K-2** p95 | 276 ms | 333 / 374 ms — **PASS** |
+| **K-3** p95 suseda | 223 ms | 282 / 279 ms — **PASS** |
+| E-1, 50 súbežných: jeden / rôzne prístroje | 276 / 138 ms (2,0) | 333 / 155 (2,2), 374 / 159 (2,3) |
+| E-1, 200 súbežných na jeden prístroj | 1 416 ms | 1 606 / 1 584 ms |
+| E-2, 1 000 000 riadkov bez indexu | 1 004 ms | 1 149 / 1 121 ms |
+| E-3, 1 000 000 riadkov s indexom | 168 ms | 169 / 164 ms |
+
+Verdikt je rovnaký, druhý stroj je o 10 – 35 % pomalší. Hranica 1 s tam leží
+nižšie: okolo **140** súbežných potvrdení na jeden prístroj (lineárne medzi
+100 a 200, priemer behov 634 → 1 595 ms) a okolo **850 000** riadkov pri 50
+súbežných (lineárne medzi 100 000 a 1 000 000, 353 → 1 135 ms). Rezerva voči
+modelu 10× je tam asi 2,8× v súbehu a 8,5× v objeme.
+
+**Pokusy — `python scripts/i02_review.py`** na `67018ac`, ten istý stroj,
+2026-11-22 20:27 UTC, návratový kód `0`. Skript používa dáta, dávky
+a štatistiku zo `scripts/i02_meranie.py`. Vo všetkých dávkach boli všetky
+potvrdenia `200 CONFIRMED` a BR-02 držalo.
+
+*Pokus B — na čo čaká sused horúceho prístroja* (bod 5, otázka 4 v PR). K-3
+pri 100 000 riadkoch. Aplikácia je tá istá, iba s iným poolom spojení
+a threadpoolom (`scripts/i02_review_app.py`):
+
+| Pool spojení / threadpool | p95 suseda | p95 prístroja A |
+| ------------------------- | ---------- | --------------- |
+| 5 + 10 / 40 (predvolené) | 258 ms (pri opakovaní 299) | 334 (362) ms |
+| 5 + 10 / **200** | 268 ms | 332 ms |
+| **70** / 40 | 141 ms | 331 ms |
+| **70** / **200** | 117 ms | 371 ms |
+
+Pre porovnanie: 50 požiadaviek na rôzne prístroje (E-1) tu má p95 154 –
+159 ms. **H-2 platí.** Sused čaká na spojenie z poolu, ktoré držia
+požiadavky čakajúce na zámok prístroja A. Väčší threadpool nepomôže, väčší
+pool áno — sused potom klesne na úroveň dávky na rôzne prístroje. Zvyšok je
+réžia jedného procesu, nie zámok. ADR-01 sa to netýka, je to parameter
+nasadenia: pri predvolenom poole s 15 spojeniami sa prístroje začnú
+ovplyvňovať, keď na jeden čaká viac ako asi 15 požiadaviek. Pri modeli 10× je
+sused stále viac ako 3× pod hranicou, nová akcia z toho nevzniká.
+
+*Pokus A — horúci prístroj s vlastnou históriou* (R-08, otázka 3 v PR).
+V meraní leží celé pozadie na 20 iných prístrojoch a prístroj A históriu
+nemá. Rezervácia však ostáva `CONFIRMED` aj po skončení — stav pre dokončenú
+rezerváciu systém nemá — takže história prístroja rastie spolu s tabuľkou.
+Tu je A jedným z 20 prístrojov pozadia, má teda 1/20 objemu. 50 súbežných
+potvrdení na A ako K-2:
+
+| Riadkov (z toho A) | Index | Plán dotazu na prekryv | Dotaz | p95 |
+| ------------------ | ----- | ---------------------- | ----- | --- |
+| 100 000 (5 000) | žiadny | `Parallel Seq Scan` | 4,0 ms | 315 ms |
+| | `(instrument_id)` | `Bitmap Heap Scan` | 1,3 ms | 187 ms |
+| | `(instrument_id, ends_at)` | `Index Scan` | 0,03 ms | 154 ms |
+| 1 000 000 (50 000) | žiadny | `Parallel Seq Scan` | 20,1 ms | 1 153 ms |
+| | `(instrument_id)` | `Bitmap Heap Scan` | 13,0 ms | **793 ms** |
+| | `(instrument_id, ends_at)` | `Index Scan` | 0,03 ms | **159 ms** |
+
+Index na `instrument_id` závislosť od objemu neodstráni, iba ju zmenší
+o podiel ostatných prístrojov: pri 1 000 000 riadkoch číta 50 000 riadkov
+histórie A a p95 je 793 ms, bližšie k hranici než k 168 ms z E-3. Index
+`(instrument_id, ends_at)` históriu vynechá, lebo podmienka prekryvu
+`ends_at > starts_at` nového intervalu je rozsah nad druhým stĺpcom. Dotaz
+potom trvá 0,03 ms pri oboch objemoch a p95 ostáva okolo 155 ms.
+
+**Nálezy a opravy** — cielene na vetve PR, text plánu nedotknutý:
+
+| # | Nález | Oprava |
+| - | ----- | ------ |
+| RV-I02-1 | E-3 meria index pri prístroji bez histórie. R-08 z neho vyvodzuje, že ošetrenie je „pripravené a zmerané". S vlastnou históriou (pokus A) dáva index na `instrument_id` pri 1 000 000 riadkoch p95 793 ms. | R-08: ošetrením je index `(instrument_id, ends_at)`, dôkazom pokus A; poznámky pri bode 3 a v *Rozhodnutí* |
+| RV-I02-2 | Bod 5: vysvetlenie poolom bola hypotéza, meranie ju neoddelilo. | pokus B; poznámka pri bode 5 |
+| RV-I02-3 | Meralo sa iba na jednom stroji. | druhý stroj vyššie; hranice doplnené pod ADR-01, pri R-08 a v hrozbách platnosti |
+| RV-I02-4 | Drobnosť: úvod I-02 hovorí o troch commitoch a „(tento commit)". Vetva ich má štyri a text je už v neskoršom commite. | ponechané — text plánu sa od `4df292e` nemení, zapísané iba tu |
+
+**K bodom v popise PR:**
+
+1. **Model záťaže — súhlas.** Pri súbehu je konzervatívny: future pressure
+   z C01 hovorí o 10× viac súbežných rezervácií v celom systéme, meranie dáva
+   všetkých 50 na jeden prístroj. Objem rastie s časom, nie so záťažou —
+   história sa nemaže. 100 000 riadkov je teda rok prevádzky pri 10× alebo
+   desať rokov pri dnešnom tempe. Jediná medzera modelu je rozloženie
+   histórie (pokus A). Pre `Seq Scan` je jedno, pri indexe rozhoduje.
+2. **Hranica p95 ≤ 1 s — súhlas.** Potvrdenie je interaktívna operácia
+   a p95 nad všetkými požiadavkami dávky zachytí poslednú v rade. Čas je
+   meraný klientom na tom istom stroji, v nasadení pribudne sieť. Rezerva pri
+   K-2 je aj na pomalšom stroji 2,7×.
+3. **R-08 — ACCEPT so spúšťačom, index teraz nie.** Rezerva v objeme je
+   8,5 – 10×, databáza nemá volume ani trvalé dáta (ADR-02) a zmena schémy
+   ide cez CR, ktorý musí rozšíriť aj `verify_schema()` o indexy. Ošetrenie
+   je opravené na `(instrument_id, ends_at)` (RV-I02-1). Do plánu CP2 Change
+   Request nepribúda.
+4. **Spomalenie suseda — vysvetlené poolom** (pokus B). Akcia nevzniká.
+5. **Druhý stroj — K-1 až K-3 PASS**, hranice nižšie (140 a 850 000).
+   ADR-01 sa neotvára.

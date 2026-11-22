@@ -414,10 +414,18 @@ Skript si vytvorí **vlastný** kontajner `swilab-i02-db` (port 5435) a aplikác
 spustí na porte 8020. Vývojovú databázu nemení a na konci kontajner odstráni.
 Surové časy uloží do `results.json`.
 
+```bash
+python scripts/i02_review.py      # review: na čo čaká sused, index pri vlastnej histórii prístroja
+```
+
+Rovnaký kontajner a port; výsledky do `review.json`. Kód aplikácie nemení,
+iný pool a threadpool nastaví `scripts/i02_review_app.py`.
+
 **Výsledok:** pri 50 súbežných potvrdeniach na jeden prístroj a 100 000
 rezerváciách BR-02 drží a p95 je 276 ms, hranica bola 1 s. ADR-01 sa
 neotvára. Dotaz na prekryv nemá index a jeho čas rastie s celou tabuľkou —
-riziko **R-08**.
+riziko **R-08**. Review na druhom stroji verdikt potvrdilo; ošetrením R-08 je
+index `(instrument_id, ends_at)`, nie iba `(instrument_id)`.
 
 ## Dokumentácia
 

@@ -612,7 +612,9 @@ znamená konkrétne: **p95 potvrdenia nad 1 s.** Na meranom nasadení (jeden
 proces aplikácie) to nastane okolo 175 súbežných potvrdení na jeden prístroj
 pri 100 000 rezerváciách, alebo okolo 1 000 000 rezervácií pri 50 súbežných.
 Druhá hranica nie je vlastnosťou zámku, ale dotazu na prekryv bez indexu —
-riziko R-08.
+riziko R-08. Na druhom stroji (review I-02) sú obe hranice nižšie, okolo
+140 súbežných a okolo 850 000 rezervácií. Hranice závisia od stroja, verdikt
+pri modeli 10× nie.
 
 ## G1. Kontext systému
 
