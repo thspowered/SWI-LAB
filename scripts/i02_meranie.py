@@ -297,8 +297,9 @@ def explain_overlap() -> dict:
         (HOT, DAY + timedelta(hours=11), DAY + timedelta(hours=10), uuid.uuid4()),
         client_side=True,
     )]
-    scan = next((line.strip().split("  ")[0].lstrip("-> ") for line in lines
-                 if "Scan" in line), "?")
+    # Pri vacsej tabulke je pod uzlom Gather "->  Parallel Seq Scan ...".
+    scan = next((line.strip().removeprefix("->").strip().split("  (")[0]
+                 for line in lines if "Scan" in line), "?")
     execution = next((line.split(":", 1)[1].strip() for line in lines
                       if line.startswith("Execution Time")), "?")
     return {"plan": scan, "execution": execution, "full": lines}
