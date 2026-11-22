@@ -599,6 +599,21 @@ Rozhodnutie znovu otvoríme, keď:
     realizovateľným doplnkom, nie náhradou.
 ```
 
+### Doplnenie 2026-11-22 — meranie dôsledku 2 (I-02)
+
+Dôsledok 2 je zmeraný ([evidence, časť I-02](evidence-and-evolution.md#i-02--meranie-serializácie-na-prístroj-adr-01)).
+Pri modeli 10× — 50 súbežných potvrdení na jeden prístroj a 100 000
+rezervácií — BR-02 drží a p95 času odozvy je 276 ms, pri rovnakej záťaži na
+rôzne prístroje 138 ms. Serializácia stojí dvojnásobok, úzke hrdlo to nie je.
+Text ADR vyššie sa nemení.
+
+Spúšťač „meranie ukáže, že serializácia na prístroj je úzke hrdlo" odteraz
+znamená konkrétne: **p95 potvrdenia nad 1 s.** Na meranom nasadení (jeden
+proces aplikácie) to nastane okolo 175 súbežných potvrdení na jeden prístroj
+pri 100 000 rezerváciách, alebo okolo 1 000 000 rezervácií pri 50 súbežných.
+Druhá hranica nie je vlastnosťou zámku, ale dotazu na prekryv bez indexu —
+riziko R-08.
+
 ## G1. Kontext systému
 
 ```

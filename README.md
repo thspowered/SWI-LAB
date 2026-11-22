@@ -399,6 +399,26 @@ konfigurácii logovania (`--log-config`) definuj aj logger `swilab`
 - [x] verzia **0.4.1** — kód sa zmenil, RC 0.4.0 ostáva `c09-release`; o vydaní
   sa v C10 nerozhoduje
 
+## I-02 — meranie serializácie na prístroj (ADR-01)
+
+Zámok nad prístrojom (ADR-01) serializuje potvrdenia toho istého prístroja.
+Issue I-02 žiadalo toto tvrdenie zmerať pri desaťnásobnom súbehu (future
+pressure z C01). Model záťaže, kritériá, výsledky a rozhodnutie sú
+v [evidence, časť I-02](docs/evidence-and-evolution.md#i-02--meranie-serializácie-na-prístroj-adr-01).
+
+```bash
+python scripts/i02_meranie.py     # asi minúta; návratový kód 0 = kritériá K-1 až K-3 PASS
+```
+
+Skript si vytvorí **vlastný** kontajner `swilab-i02-db` (port 5435) a aplikáciu
+spustí na porte 8020. Vývojovú databázu nemení a na konci kontajner odstráni.
+Surové časy uloží do `results.json`.
+
+**Výsledok:** pri 50 súbežných potvrdeniach na jeden prístroj a 100 000
+rezerváciách BR-02 drží a p95 je 276 ms, hranica bola 1 s. ADR-01 sa
+neotvára. Dotaz na prekryv nemá index a jeho čas rastie s celou tabuľkou —
+riziko **R-08**.
+
 ## Dokumentácia
 
 - [docs/specification.md](docs/specification.md) — špecifikácia správania, baseline v0.4
@@ -406,4 +426,4 @@ konfigurácii logovania (`--log-config`) definuj aj logger `swilab`
 - [docs/change-impact-c02.md](docs/change-impact-c02.md) — analýza dopadu zmeny (schvaľovanie)
 - [docs/intent-and-change.md](docs/intent-and-change.md) — Project Frame, future pressure, C08 Change Request `CR-08`
 - [docs/architecture-and-decisions.md](docs/architecture-and-decisions.md) — stack, vrstvy, rozhodnutia, architektúra C03 (ADR-01), detailed design C05
-- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03, C05, C07 (nálezy, register rizík), C08 (baseline, test cases), C09 (CI, release) a C10 (prevádzka a logy)
+- [docs/evidence-and-evolution.md](docs/evidence-and-evolution.md) — C01 spike, evidence C02, C03, C05, C07 (nálezy, register rizík), C08 (baseline, test cases), C09 (CI, release), C10 (prevádzka a logy) a I-02 (meranie ADR-01)
