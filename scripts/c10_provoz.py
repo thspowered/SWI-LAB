@@ -209,7 +209,8 @@ def sql(query: str, params: tuple = ()) -> list[tuple]:
     """Kazde citanie NOVYM spojenim - vidi iba commitnuty stav."""
     with psycopg.connect(SQL_DATABASE_URL, autocommit=True, connect_timeout=5) as conn:
         conn.execute("SET TIME ZONE 'UTC'")
-        return conn.execute(query, params).fetchall()
+        cursor = conn.execute(query, params)
+        return cursor.fetchall() if cursor.description else []
 
 
 def seed() -> None:
@@ -388,12 +389,17 @@ def log_lifecycle(situation: Situation, lines: list[str]) -> None:
 # --- HTTP ------------------------------------------------------------------
 
 
-def call(client: httpx.Client, method: str, path: str, **kwargs) -> httpx.Response | None:
-    """None = odpoved neprisla (timeout, spojenie) - vysledok je NEZNAMY."""
+def call(method: str, path: str, **kwargs) -> httpx.Response | None:
+    """None = odpoved neprisla (timeout, spojenie) - vysledok je NEZNAMY.
+
+    Kazda poziadavka NOVYM spojenim: uvicorn po neosetrenej vynimke spojenie
+    zatvori (prvy beh: /health hned po 500 dostal po keep-alive spojeni
+    "Connection reset by peer"). Opakovane spojenie by tak miesalo stav
+    aplikacie s artefaktom klienta."""
     body = kwargs.get("json")
     say(f"HTTP {method} {named(path)}" + (f"  {named(str(body))}" if body else ""))
     try:
-        response = client.request(method, path, **kwargs)
+        response = httpx.request(method, BASE_URL + path, timeout=30, **kwargs)
     except httpx.HTTPError as exc:
         print(f"      -> bez odpovede: {type(exc).__name__}: {exc}")
         return None
@@ -401,8 +407,8 @@ def call(client: httpx.Client, method: str, path: str, **kwargs) -> httpx.Respon
     return response
 
 
-def create(client, owner, starts_at, ends_at) -> httpx.Response | None:
-    return call(client, "POST", "/reservations", json={
+def create(owner, starts_at, ends_at) -> httpx.Response | None:
+    return call("POST", "/reservations", json={
         "instrument_id": str(R1), "user_id": str(owner),
         "starts_at": starts_at.isoformat(), "ends_at": ends_at.isoformat(),
     })
@@ -416,18 +422,18 @@ def remember(name: str, response: httpx.Response | None) -> bool:
     return True
 
 
-def confirm(client, name: str, actor) -> httpx.Response | None:
-    return call(client, "POST", f"/reservations/{IDS[name]}/confirm",
+def confirm(name: str, actor) -> httpx.Response | None:
+    return call("POST", f"/reservations/{IDS[name]}/confirm",
                 json={"requested_by": str(actor)})
 
 
-def availability(client) -> httpx.Response | None:
-    return call(client, "GET", f"/instruments/{R1}/availability",
+def availability() -> httpx.Response | None:
+    return call("GET", f"/instruments/{R1}/availability",
                 params={"starts_at": at(10).isoformat(), "ends_at": at(11).isoformat()})
 
 
-def has(response, status: int, **fields) -> bool:
-    if response is None or response.status_code != status:
+def has(response, http_status: int, **fields) -> bool:
+    if response is None or response.status_code != http_status:
         return False
     try:
         data = response.json()
@@ -446,25 +452,25 @@ def is_state(name: str, state: str, interval: tuple | None = None) -> bool:
 # --- situacie --------------------------------------------------------------
 
 
-def p1_success(client, log: Log) -> None:
+def p1_success(log: Log) -> None:
     s = Situation("P1", "uspesne potvrdenie")
     log.mark()
-    if not s.check(remember("B1", create(client, S1, at(10), at(11))), "vytvorenie B1: 201"):
+    if not s.check(remember("B1", create(S1, at(10), at(11))), "vytvorenie B1: 201"):
         return
     s.check(is_state("B1", "DRAFT"), "SQL: B1 DRAFT")
-    s.check(has(confirm(client, "B1", S1), 200, state="CONFIRMED"), "potvrdenie B1: 200 CONFIRMED")
+    s.check(has(confirm("B1", S1), 200, state="CONFIRMED"), "potvrdenie B1: 200 CONFIRMED")
     s.check(is_state("B1", "CONFIRMED", (at(10), at(11))), "SQL: B1 CONFIRMED, interval bez zmeny")
     s.check(blocking_pairs() == [], "SQL: ziadna blokujuca dvojica (BR-02)")
     show_log(log.new_lines())
 
 
-def p2_collision(client, log: Log) -> None:
+def p2_collision(log: Log) -> None:
     s = Situation("P2", "zamietnuta kolizia")
     log.mark()
-    if not s.check(remember("B2", create(client, S2, at(10, 30), at(11, 30))),
+    if not s.check(remember("B2", create(S2, at(10, 30), at(11, 30))),
                    "vytvorenie B2 (prekryv s B1, REQ-02): 201"):
         return
-    s.check(has(confirm(client, "B2", S2), 409, code="OVERLAP"), "potvrdenie B2: 409 OVERLAP")
+    s.check(has(confirm("B2", S2), 409, code="OVERLAP"), "potvrdenie B2: 409 OVERLAP")
     s.check(is_state("B1", "CONFIRMED", (at(10), at(11))), "SQL: B1 CONFIRMED bez zmeny")
     s.check(is_state("B2", "DRAFT"), "SQL: B2 ostava DRAFT (REQ-05)")
     s.check(blocking_pairs() == [], "SQL: ziadna blokujuca dvojica (BR-02)")
@@ -476,17 +482,17 @@ def p2_collision(client, log: Log) -> None:
     s.log_notes.append("INFO - " + note)
 
 
-def p3a_outage(client, log: Log) -> None:
+def p3a_outage(log: Log) -> None:
     s = Situation("P3a", "vypadok databazy pocas operacie a obnova")
     log.mark()
-    if not s.check(remember("B3", create(client, S1, at(12), at(13))), "vytvorenie B3: 201"):
+    if not s.check(remember("B3", create(S1, at(12), at(13))), "vytvorenie B3: 201"):
         return
     say(f"docker stop {CONTAINER}")
     docker("stop", CONTAINER)
-    response = confirm(client, "B3", S1)
+    response = confirm("B3", S1)
     s.check(response is not None and 500 <= response.status_code < 600,
             "potvrdenie B3 pocas vypadku: technicka chyba 5xx (nie 2xx, nie 409)")
-    health = call(client, "GET", "/health")
+    health = call("GET", "/health")
     say("POZOROVANIE /health pocas vypadku: "
         + ("bez odpovede" if health is None else f"{health.status_code} {health.text}"))
     say(f"docker start {CONTAINER}")
@@ -500,7 +506,7 @@ def p3a_outage(client, log: Log) -> None:
     s.check(is_state("B1", "CONFIRMED", (at(10), at(11))), "SQL: B1 CONFIRMED - data vypadok prezili")
     if b3_draft:
         say("B3 je DRAFT -> jedno opakovanie potvrdenia je bezpecne")
-        s.check(has(confirm(client, "B3", S1), 200, state="CONFIRMED"),
+        s.check(has(confirm("B3", S1), 200, state="CONFIRMED"),
                 "opakovanie bez restartu aplikacie: 200 CONFIRMED")
         s.check(is_state("B3", "CONFIRMED"), "SQL: B3 CONFIRMED")
     else:
@@ -511,17 +517,17 @@ def p3a_outage(client, log: Log) -> None:
     log_diagnostic(s, lines, f"/reservations/{IDS['B3']}/confirm")
 
 
-def p3b_db_restart(client, log: Log) -> None:
+def p3b_db_restart(log: Log) -> None:
     s = Situation("P3b", "restart databazy, ked aplikacia nic nerobi")
     log.mark()
     say(f"docker restart {CONTAINER}")
     docker("restart", CONTAINER)
     wait_for_db()
     say("databaza znova prijima spojenia")
-    first = availability(client)
+    first = availability()
     s.check(has(first, 200, status="UNAVAILABLE", conflicting_reservation_ids=[IDS["B1"]]),
             "PRVA poziadavka po obnove: 200 UNAVAILABLE, konflikt B1")
-    second = availability(client)
+    second = availability()
     s.check(has(second, 200, status="UNAVAILABLE", conflicting_reservation_ids=[IDS["B1"]]),
             "druha poziadavka: 200 UNAVAILABLE, konflikt B1")
     s.check(is_state("B1", "CONFIRMED"), "SQL: B1 CONFIRMED")
@@ -531,7 +537,7 @@ def p3b_db_restart(client, log: Log) -> None:
         log_diagnostic(s, lines, f"/instruments/{R1}/availability")
 
 
-def p4_app_restart(client, app: App, log: Log) -> None:
+def p4_app_restart(app: App, log: Log) -> None:
     s = Situation("P4", "restart aplikacie")
     log.mark()
     say("SIGINT aplikacii (ako Ctrl+C)")
@@ -539,14 +545,14 @@ def p4_app_restart(client, app: App, log: Log) -> None:
     s.check(code == 0, f"aplikacia skoncila s kodom 0 do 10 s (skutocne: {code})")
     say("start aplikacie")
     app.start()
-    s.check(has(call(client, "GET", "/health"), 200, status="ok"), "/health po starte: 200")
+    s.check(has(call("GET", "/health"), 200, status="ok"), "/health po starte: 200")
     s.check(is_state("B1", "CONFIRMED") and is_state("B3", "CONFIRMED"),
             "SQL: B1 a B3 CONFIRMED - stav je v databaze")
-    s.check(has(availability(client), 200, status="UNAVAILABLE",
+    s.check(has(availability(), 200, status="UNAVAILABLE",
                 conflicting_reservation_ids=[IDS["B1"]]),
             "dostupnost po restarte: 200 UNAVAILABLE, konflikt B1")
-    if s.check(remember("B4", create(client, S2, at(14), at(15))), "vytvorenie B4: 201"):
-        s.check(has(confirm(client, "B4", S2), 200, state="CONFIRMED"),
+    if s.check(remember("B4", create(S2, at(14), at(15))), "vytvorenie B4: 201"):
+        s.check(has(confirm("B4", S2), 200, state="CONFIRMED"),
                 "potvrdenie B4: 200 CONFIRMED")
         s.check(is_state("B4", "CONFIRMED"), "SQL: B4 CONFIRMED")
     s.check(blocking_pairs() == [], "SQL: ziadna blokujuca dvojica (BR-02)")
@@ -591,12 +597,11 @@ def main() -> int:
         print(f"server:    PostgreSQL {sql('SHOW server_version')[0][0]}")
         app.start()
         seed()
-        with httpx.Client(base_url=BASE_URL, timeout=30) as client:
-            p1_success(client, log)
-            p2_collision(client, log)
-            p3a_outage(client, log)
-            p3b_db_restart(client, log)
-            p4_app_restart(client, app, log)
+        p1_success(log)
+        p2_collision(log)
+        p3a_outage(log)
+        p3b_db_restart(log)
+        p4_app_restart(app, log)
     except Blocked as exc:
         blocked = exc
     finally:
