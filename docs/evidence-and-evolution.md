@@ -2138,3 +2138,63 @@ a 3.12.13) ten istý wheel; pre finálny kód `8200655` macOS arm64 s Pythonom
 3.12.11 a Linux x86_64 s Pythonom 3.12.16 v CI. Reprodukovateľnosť artefaktu
 je tým doložená nezávisle od autora.
 
+## C10 — Prevádzka: čo sa v systéme stalo a ako to poznáme
+
+Štyri prevádzkové situácie zo zadania C10 — úspešné potvrdenie, zamietnutá
+kolízia, technická porucha s obnovou a reštart aplikácie — na **izolovanej
+testovacej inštancii**: vlastný kontajner `swilab-c10-db` (PostgreSQL 16,
+port 5434) a aplikácia na porte 8010. Vývojová databáza `swilab-db` (port
+5433), nad ktorou beží `pytest`, sa nezastavuje ani nemení. Dáta sú iba
+testovacie, založí ich skript.
+
+Všetky situácie vykoná jeden príkaz, `scripts/c10_provoz.py`. Rovnako ako
+skript z C08 neimportuje balík `swilab`: operácie volá cez HTTP, stav číta
+SQL dotazom **novým spojením priamo z databázy** a log aplikácie číta zo
+súboru, kam aplikácia píše `stdout` aj `stderr`. Log ukazuje, ako aplikácia
+reagovala. O stave dát rozhoduje databáza.
+
+### Návrh pred behom (Expected)
+
+*Expected* je zapísané **pred prvým behom** (tento commit). Výsledok a stav
+vychádzajú zo špecifikácie v0.4. Kde špecifikácia mlčí (technická porucha,
+reštart), je Expected **prevádzkové očakávanie tímu** a tak je aj označené.
+
+**Spoločné pre všetky situácie:**
+
+- **Rozhranie:** skutočné HTTP API (`uvicorn`) nad skutočným PostgreSQL 16,
+  žiadny mock. Aplikácia sa spúšťa bez vlastnej konfigurácie logovania, tak
+  ako v README.
+- **Oracle stavu:** SQL novým spojením. BR-02 overuje vlastný dotaz skriptu
+  (dvojice blokujúcich rezervácií, ktoré sa prekrývajú podľa BR-01), rovnaký
+  ako v C08.
+- **Dáta:** prístroj `R1` je aktívny a **bez** schvaľovania, takže potvrdenie
+  vedie priamo do `CONFIRMED` (REQ-10). Používatelia `S1` a `S2` sú `STUDENT`
+  s platným certifikátom. Prístroj, používatelia a certifikáty sa vkladajú
+  SQL (TBD-02). Rezervácie zakladá API (OP-01), nie SQL.
+- **Čas:** deň **D = dátum behu + 7 dní**, UTC, intervaly `[start, end)`.
+
+| ID | Situácia a kroky | Expected — výsledok | Expected — stav (SQL, nové spojenie) | Čo má ukázať log |
+| -- | ---------------- | ------------------- | ------------------------------------ | ---------------- |
+| **P1** | **Úspešné potvrdenie.** `S1` vytvorí `B1` `R1 [D 10:00, D 11:00)` a potvrdí ju. | `201 DRAFT`, potom `200 CONFIRMED` (REQ-01, REQ-04, REQ-10) | `B1` `CONFIRMED`, interval bez zmeny; žiadna blokujúca dvojica (BR-02) | nič navyše — úspech dokladá odpoveď a stav, log nie je povinný |
+| **P2** | **Zamietnutá kolízia.** `S2` vytvorí `B2` `R1 [D 10:30, D 11:30)` — vytvorenie prekryv nevyhodnocuje (REQ-02) — a potvrdí ju. | `201 DRAFT`, potom `409 OVERLAP` (REQ-04) | `B1` `CONFIRMED` bez zmeny, `B2` ostáva `DRAFT` (REQ-05), žiadna blokujúca dvojica | rozhodnúť, či treba záznam — doménové zamietnutie **nie je** technická chyba |
+| **P3a** | **Výpadok databázy počas operácie.** `S1` vytvorí `B3` `R1 [D 12:00, D 13:00)`; `docker stop` databázy; potvrdenie `B3`; `GET /health`; `docker start`. | potvrdenie skončí **technickou chybou 5xx**, nie úspechom ani doménovým `409`. Klient z odpovede nevie, či sa zápis vykonal. `/health` špecifikácia nedefinuje — iba zaznamenáme. | po obnove, **pred akýmkoľvek opakovaním**: `B3` `DRAFT`, `B1` `CONFIRMED` (dáta výpadok prežili). Až potom jedno opakovanie potvrdenia → `200 CONFIRMED` **bez reštartu aplikácie**, žiadna blokujúca dvojica. | **jeden záznam** s časom, operáciou (metóda + cesta), typom problému a výsledkom (5xx) |
+| **P3b** | **Reštart databázy, keď aplikácia nič nerobí.** `docker restart` databázy; potom dve čítania dostupnosti `R1 [D 10:00, D 11:00)`. | *prevádzkové očakávanie:* už **prvá** požiadavka po obnove uspeje — `200 UNAVAILABLE`, konflikt `B1` | `B1` `CONFIRMED` | ak požiadavka zlyhá, rovnaký záznam ako pri P3a |
+| **P4** | **Reštart aplikácie.** `SIGINT` (ako Ctrl+C), nový štart; `GET /health`; dostupnosť `R1 [D 10:00, D 11:00)`; `S2` vytvorí a potvrdí `B4` `R1 [D 14:00, D 15:00)`. | ukončenie s kódom `0` do 10 s; po štarte `/health` `200`; dostupnosť `UNAVAILABLE` s `B1`; `B4` `201` → `200 CONFIRMED` | `B1`, `B3` `CONFIRMED` — stav je v databáze, nie v aplikácii; `B4` `CONFIRMED`; žiadna blokujúca dvojica | kedy sa aplikácia zastavila a kedy znova bežala, ideálne aj ktorá verzia |
+
+**Pravidlá behu:**
+
+- **Neopakovať zápis naslepo.** Pri P3a klient dostane 5xx a nevie, či sa
+  potvrdenie zapísalo. Skript preto najprv prečíta stav `B3` z databázy
+  a potvrdenie zopakuje **iba vtedy**, ak je `B3` stále `DRAFT`. Inak ho
+  neopakuje a situácia je `FAIL`.
+- **Verdikt `PASS` / `FAIL` sa týka výsledku a stavu.** Užitočnosť logu sa
+  posudzuje zvlášť (riadky `LOG` vo výpise), lebo log nie je dôkaz stavu.
+- **`BLOCKED`**, ak nebeží Docker, ak kontajner s rovnakým menom nepatrí
+  skriptu alebo ak aplikácia nenaštartuje. Vtedy skript vypíše príčinu
+  a ďalší krok.
+
+**Hypotéza o logoch pred behom.** Aplikácia nemá vlastné logovanie
+(`grep logging src/` nič nenájde). Vypisuje teda iba `uvicorn` so svojou
+predvolenou konfiguráciou. Očakávame prístupové riadky a traceback chyby,
+**bez času**. Ak sa to potvrdí, chýba „kedy" — doplníme minimálny záznam
+a pokus zopakujeme.
